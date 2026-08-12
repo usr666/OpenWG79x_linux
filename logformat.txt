@@ -1,0 +1,19 @@
+CSV, one sample per row. Rows starting with # shall be ignored
+Always 16 fields; an empty field means the value was not known at that time.
+
+timestamp_utc          UTC, ISO 8601, milliseconds
+latitude_nmea          verbatim NMEA ddmm.mmmmm; deg = floor(v/100), decimal = deg + (v - deg*100)/60
+latitude_hemisphere    N or S; S is negative
+longitude_nmea         verbatim NMEA dddmm.mmmmm; converted as latitude_nmea
+longitude_hemisphere   E or W; W is negative
+fix_quality            1 GPS, 2 DGPS, 3 PPS, 4 RTK fixed, 5 RTK float, 6 dead reckoning
+fix_mode               0 unknown, 1 no fix, 2 2D, 3 3D
+satellites_used        satellites used in the fix
+hdop                   horizontal dilution of precision
+mower_state            0-9, as defined by the mower firmware
+battery_soc_percent    battery charge, 0-100
+front_bump             1 = front bumper triggered
+lift                   1 = mower lifted
+wire_right_inside      1 = right wire sensor inside the boundary
+wire_left_inside       1 = left wire sensor inside the boundary
+near_wire              1 = close to the boundary wire, 0 = far from boundary wire

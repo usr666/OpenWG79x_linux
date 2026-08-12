@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mower log map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; font: 13px/1.4 system-ui, sans-serif; background: #14171a; color: #e6e6e6; }
+
+  #sidebar {
+    width: 300px; flex: none; display: flex; flex-direction: column;
+    background: #181b1f; border-right: 1px solid #2b3238; overflow: hidden;
+  }
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #map { flex: 1; min-height: 0; background: #14171a; }
+
+  /* ---- graph strip along the bottom quarter of the window ---- */
+  #chart {
+    height: 25%; flex: none; display: flex; flex-direction: column;
+    padding: 6px 8px 4px; background: #181b1f; border-top: 1px solid #2b3238;
+  }
+  #chartHead { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  #chartHead select { width: auto; padding: 2px 4px; }
+  #chartName { color: #9aa4ae; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chartZoom { color: #78828c; font-size: 11px; white-space: nowrap; }
+  #chartValue { margin-left: auto; color: #78828c; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #chartValue b { color: #e6e6e6; }
+  #chartCanvas { flex: 1; min-height: 0; width: 100%; display: block; cursor: crosshair; }
+
+  section { padding: 10px; border-bottom: 1px solid #2b3238; }
+  section.grow { flex: 1; min-height: 0; overflow-y: auto; border-bottom: none; }
+  h1 { font-size: 13px; margin: 0 0 8px; letter-spacing: .04em; text-transform: uppercase; color: #9aa4ae; }
+  h2 { font-size: 11px; margin: 0 0 6px; letter-spacing: .06em; text-transform: uppercase; color: #78828c; }
+
+  .row { display: flex; gap: 6px; margin-bottom: 6px; }
+  input[type=text], select, button {
+    background: #22262b; color: #e6e6e6; border: 1px solid #3a424b;
+    border-radius: 4px; padding: 5px 6px; font: inherit;
+  }
+  input[type=text] { flex: 1; min-width: 0; }
+  select { width: 100%; }
+  button { cursor: pointer; white-space: nowrap; }
+  button:hover { background: #2c323a; }
+  input[type=range] { width: 100%; }
+
+  /* ---- file list ---- */
+  #files { list-style: none; margin: 0; padding: 0; }
+  #files li {
+    display: flex; align-items: center; gap: 7px; padding: 5px 6px; border-radius: 4px;
+    cursor: pointer; user-select: none;
+  }
+  #files li:hover { background: #22262b; }
+  #files li.on { background: #23303a; }
+  #files li.active { outline: 1px solid #4cc9f0; }
+  #files .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; background: #3a424b; }
+  #files .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #files .meta { color: #78828c; font-size: 11px; }
+
+  #status { color: #9aa4ae; min-height: 1.4em; }
+  #status.error { color: #ff8080; }
+  #stats div, #cursor div, #tracks div.line { display: flex; justify-content: space-between; gap: 8px; }
+  #stats span, #cursor span { color: #9aa4ae; }
+  #legend .key { display: inline-flex; align-items: center; gap: 5px; margin: 0 10px 4px 0; }
+  #legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  #cursor { margin-top: 6px; font-variant-numeric: tabular-nums; }
+  #stats { font-variant-numeric: tabular-nums; }
+  .hidden { display: none !important; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #22262b; color: #e6e6e6; }
+  .leaflet-popup-content { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <section>
+    <h1>Mower logs</h1>
+    <div class="row">
+      <input type="text" id="dir" spellcheck="false" value="http://192.168.1.127:1080/mower/">
+      <button id="refresh" title="List the .csv files in that directory">List</button>
+    </div>
+    <div class="row">
+      <input type="text" id="url" spellcheck="false" placeholder="…or a single log URL">
+      <button id="add">Add</button>
+    </div>
+    <div class="row">
+      <input type="file" id="file" accept=".csv,text/csv" multiple style="flex:1;min-width:0">
+    </div>
+    <div id="status">Ready.</div>
+  </section>
+
+  <section class="grow">
+    <h2>Files <span id="hint" class="meta"></span></h2>
+    <ul id="files"></ul>
+  </section>
+
+  <section>
+    <select id="colorBy">
+      <option value="auto">Colour by: automatic</option>
+      <option value="track">Colour by: file</option>
+      <option value="state">Colour by: mower state</option>
+      <option value="battery">Colour by: battery SoC</option>
+      <option value="near_wire">Colour by: near wire</option>
+      <option value="wire">Colour by: wire sensors</option>
+      <option value="hdop">Colour by: HDOP</option>
+      <option value="sats">Colour by: satellites used</option>
+      <option value="fix">Colour by: fix quality</option>
+      <option value="time">Colour by: time</option>
+    </select>
+    <div id="legend" style="margin-top:8px"></div>
+  </section>
+
+  <section id="statsBox" class="hidden">
+    <h2 id="statsTitle">Selection</h2>
+    <div id="stats"></div>
+    <input type="range" id="slider" min="0" max="0" value="0" style="margin-top:8px">
+    <div id="cursor"></div>
+  </section>
+</div>
+
+<div id="main">
+  <div id="map"></div>
+  <div id="chart">
+    <div id="chartHead">
+      <select id="channel">
+        <option value="soc">Battery SoC</option>
+        <option value="sats">Satellites used</option>
+        <option value="hdop">HDOP</option>
+        <option value="state">Mower state</option>
+      </select>
+      <span id="chartName"></span>
+      <span id="chartZoom"></span>
+      <span id="chartValue"></span>
+    </div>
+    <canvas id="chartCanvas"></canvas>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ---------------------------------------------------------------- map ---- */
+
+/* Zoom past what the imagery supports: the tiles just get upscaled, but the
+   canvas-drawn track stays sharp, which is the point at centimetre scale.
+   Half-steps so the last few levels are not a huge jump. */
+const MAX_ZOOM = 26;
+
+const map = L.map("map", {
+  preferCanvas: true, maxZoom: MAX_ZOOM, zoomSnap: 0.5, zoomDelta: 0.5,
+  wheelPxPerZoomLevel: 120
+}).setView([60.574, 15.631], 18);
+
+const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: MAX_ZOOM, maxNativeZoom: 19, attribution: "&copy; OpenStreetMap contributors"
+});
+/* Esri has no imagery past z18 over this lawn — asking for more just returns a
+   "map data not yet available" placeholder, so upscale z18 instead. */
+const sat = L.tileLayer(
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+  maxZoom: MAX_ZOOM, maxNativeZoom: 18, attribution: "Imagery &copy; Esri"
+});
+sat.addTo(map);
+L.control.layers({ "Satellite": sat, "OpenStreetMap": osm }, null, { position: "topright" }).addTo(map);
+L.control.scale({ imperial: false }).addTo(map);
+
+const trackLayer  = L.layerGroup().addTo(map);   /* the coloured paths       */
+const eventLayer  = L.layerGroup().addTo(map);   /* bump / lift markers      */
+const markerLayer = L.layerGroup().addTo(map);   /* start, end, scrub cursor */
+
+/* ------------------------------------------------------ log file parsing -- */
+/* Format per logformat.txt: 16 comma separated fields per sample, rows
+   starting with # ignored, an empty field means the value was not known. */
+
+/* NMEA ddmm.mmmmm / dddmm.mmmmm -> signed decimal degrees. */
+function nmeaToDeg(value, hemisphere) {
+  const v = parseFloat(value);
+  if (!isFinite(v)) return NaN;
+  const deg = Math.floor(v / 100);
+  const dec = deg + (v - deg * 100) / 60;
+  const h = (hemisphere || "").trim().toUpperCase();
+  return (h === "S" || h === "W") ? -dec : dec;
+}
+
+const num = s => (s === undefined || s.trim() === "") ? null : Number(s);
+
+function parseCsv(text) {
+  const rows = [];
+  let skipped = 0;
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+
+    const f = line.split(",");
+    if (f.length < 16) { skipped++; continue; }
+
+    const lat = nmeaToDeg(f[1], f[2]);
+    const lon = nmeaToDeg(f[3], f[4]);
+    if (!isFinite(lat) || !isFinite(lon)) { skipped++; continue; }   /* position unknown */
+
+    const t = Date.parse(f[0]);
+    rows.push({
+      t: isFinite(t) ? t : null, iso: f[0], lat, lon,
+      fix_quality: num(f[5]), fix_mode: num(f[6]), sats: num(f[7]), hdop: num(f[8]),
+      state: num(f[9]), soc: num(f[10]),
+      bump: num(f[11]), lift: num(f[12]),
+      wire_right: num(f[13]), wire_left: num(f[14]), near_wire: num(f[15])
+    });
+  }
+  return { rows, skipped };
+}
+
+/* --------------------------------------------------------------- colour -- */
+
+const TRACK_COLORS = ["#4cc9f0", "#f9c74f", "#90be6d", "#f8961e", "#b5179e",
+                      "#43aa8b", "#f94144", "#4895ef"];
+const STATE_COLORS = ["#8d99ae", "#4cc9f0", "#4895ef", "#43aa8b", "#90be6d",
+                      "#f9c74f", "#f8961e", "#f3722c", "#f94144", "#b5179e"];
+const FIX_COLORS = { 1: "#f9c74f", 2: "#90be6d", 3: "#43aa8b",
+                     4: "#4cc9f0", 5: "#4895ef", 6: "#f94144" };
+const GREY = "#8d99ae";
+
+/* Blend along a list of hex stops; f in [0,1]. */
+function ramp(stops, f) {
+  f = Math.max(0, Math.min(1, f));
+  const x = f * (stops.length - 1), i = Math.min(Math.floor(x), stops.length - 2), k = x - i;
+  const a = parseInt(stops[i].slice(1), 16), b = parseInt(stops[i + 1].slice(1), 16);
+  const mix = sh => Math.round((((a >> sh) & 255) * (1 - k)) + (((b >> sh) & 255) * k));
+  return "#" + [mix(16), mix(8), mix(0)].map(v => v.toString(16).padStart(2, "0")).join("");
+}
+const HEAT = ["#f94144", "#f8961e", "#f9c74f", "#90be6d", "#43aa8b"];   /* bad -> good  */
+const TIME = ["#4cc9f0", "#4895ef", "#b5179e", "#f94144", "#f9c74f"];   /* early -> late */
+
+/* "auto" = per file when several are shown, mower state when only one is. */
+function effectiveMode() {
+  const mode = document.getElementById("colorBy").value;
+  if (mode !== "auto") return mode;
+  return selected().length > 1 ? "track" : "state";
+}
+
+function colorFn(mode, track, rows) {
+  const t0 = rows.length ? rows[0].t : 0;
+  const t1 = rows.length ? rows[rows.length - 1].t : 0;
+
+  switch (mode) {
+    case "track":     return () => track.color;
+    case "state":     return r => r.state == null ? GREY : (STATE_COLORS[r.state] || GREY);
+    case "battery":   return r => r.soc == null ? GREY : ramp(HEAT, r.soc / 100);
+    case "near_wire": return r => r.near_wire == null ? GREY : (r.near_wire ? "#f94144" : "#43aa8b");
+    case "wire":      return r => {
+      if (r.wire_left == null || r.wire_right == null) return GREY;
+      if (r.wire_left && r.wire_right) return "#43aa8b";   /* both inside     */
+      if (!r.wire_left && !r.wire_right) return "#f94144"; /* both outside    */
+      return "#f9c74f";                                    /* straddling wire */
+    };
+    case "hdop":      return r => r.hdop == null ? GREY : ramp(HEAT, 1 - (r.hdop - 0.5) / 2.5);
+    case "sats":      return r => r.sats == null ? GREY : ramp(HEAT, (r.sats - 4) / 26);
+    case "fix":       return r => FIX_COLORS[r.fix_quality] || GREY;
+    case "time":      return r => (t1 > t0 && r.t != null) ? ramp(TIME, (r.t - t0) / (t1 - t0)) : GREY;
+    default:          return () => track.color;
+  }
+}
+
+function legendFor(mode, tracks) {
+  const rows = tracks.flatMap(view);
+  const keys = pairs => pairs.map(([c, l]) =>
+    `<span class="key"><i style="background:${c}"></i>${l}</span>`).join("");
+  const gradient = (stops, lo, hi) =>
+    `<div style="height:10px;border-radius:3px;background:linear-gradient(90deg,${stops.join(",")})"></div>` +
+    `<div style="display:flex;justify-content:space-between;color:#78828c">` +
+    `<span>${lo}</span><span>${hi}</span></div>`;
+
+  switch (mode) {
+    case "track":     return keys(tracks.map(t => [t.color, t.name]));
+    case "state": {
+      const seen = [...new Set(rows.map(r => r.state).filter(s => s != null))].sort((a, b) => a - b);
+      return keys(seen.map(s => [STATE_COLORS[s] || GREY, "state " + s]));
+    }
+    case "battery":   return gradient(HEAT, "0 %", "100 %");
+    case "near_wire": return keys([["#43aa8b", "far from wire"], ["#f94144", "near wire"]]);
+    case "wire":      return keys([["#43aa8b", "both inside"], ["#f9c74f", "one outside"],
+                                   ["#f94144", "both outside"]]);
+    case "hdop":      return gradient([...HEAT].reverse(), "HDOP 0.5", "3.0+");
+    case "sats":      return gradient(HEAT, "4 sats", "30 sats");
+    case "fix": {
+      const names = { 1: "GPS", 2: "DGPS", 3: "PPS", 4: "RTK fixed", 5: "RTK float", 6: "dead reckoning" };
+      const seen = [...new Set(rows.map(r => r.fix_quality).filter(q => q != null))].sort((a, b) => a - b);
+      return keys(seen.map(q => [FIX_COLORS[q] || GREY, names[q] || ("quality " + q)]));
+    }
+    default:          return "";
+  }
+}
+
+/* --------------------------------------------------------------- tracks -- */
+/* One entry per known log file. rows === null until it has been loaded. */
+
+const TRACKS = [];             /* {key, name, url, file, rows, color, on} */
+let activeKey = null;          /* file the stats box and scrubber follow  */
+
+/* Time window picked by dragging on the graph; null means the whole log.
+   Everything downstream — map, stats, scrubber, graph — works off view(). */
+let viewRange = null;          /* {t0, t1} in epoch ms                    */
+
+const inView = r => !viewRange || (r.t != null && r.t >= viewRange.t0 && r.t <= viewRange.t1);
+const view = track => viewRange ? track.rows.filter(inView) : track.rows;
+
+const selected = () => TRACKS.filter(t => t.on && t.rows && t.rows.length);
+const byKey = k => TRACKS.find(t => t.key === k);
+
+function addTrack(t) {
+  if (byKey(t.key)) return byKey(t.key);
+  t.color = TRACK_COLORS[TRACKS.length % TRACK_COLORS.length];
+  t.rows = null;
+  t.on = false;
+  TRACKS.push(t);
+  return t;
+}
+
+/* --------------------------------------------------------------- render -- */
+
+const GAP_MS = 10000;   /* longer than this between samples = break the line */
+
+function metres(a, b) {
+  const R = 6371000, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad;
+  const dLon = (b.lon - a.lon) * rad * Math.cos((a.lat + b.lat) / 2 * rad);
+  return Math.hypot(dLat, dLon) * R;
+}
+
+function fmtDuration(ms) {
+  const s = Math.round(ms / 1000);
+  return `${String(Math.floor(s / 3600)).padStart(2, "0")}:` +
+         `${String(Math.floor(s / 60) % 60).padStart(2, "0")}:` +
+         `${String(s % 60).padStart(2, "0")}`;
+}
+
+function pathLength(rows) {
+  let d = 0;
+  for (let i = 1; i < rows.length; i++) d += metres(rows[i - 1], rows[i]);
+  return d;
+}
+
+function popupHtml(r, track) {
+  return [
+    `<b>${track.name}</b>`,
+    r.iso,
+    `${r.lat.toFixed(7)}, ${r.lon.toFixed(7)}`,
+    `state ${r.state ?? "?"} &middot; battery ${r.soc ?? "?"} %`,
+    `fix ${r.fix_quality ?? "?"} / mode ${r.fix_mode ?? "?"} &middot; ${r.sats ?? "?"} sats` +
+      ` &middot; HDOP ${r.hdop ?? "?"}`,
+    `wire L/R ${r.wire_left ?? "?"}/${r.wire_right ?? "?"} &middot; near ${r.near_wire ?? "?"}` +
+      `${r.bump ? " &middot; <b>bump</b>" : ""}${r.lift ? " &middot; <b>lift</b>" : ""}`
+  ].join("<br>");
+}
+
+function drawTrack(track, rows, mode) {
+  const color = colorFn(mode, track, rows);
+
+  /* One polyline per run of same-coloured samples, so a 10k sample log stays
+     a few dozen layers instead of 10k of them. */
+  let pts = [rows[0]], cur = color(rows[0]);
+  const flush = c => {
+    if (pts.length > 1) {
+      L.polyline(pts.map(r => [r.lat, r.lon]),
+                 { color: c, weight: 3, opacity: .95, lineJoin: "round" }).addTo(trackLayer);
+    }
+    pts = [];
+  };
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i], c = color(r);
+    if (r.t != null && rows[i - 1].t != null && r.t - rows[i - 1].t > GAP_MS) {
+      flush(cur); pts = [r]; cur = c; continue;
+    }
+    if (c !== cur) { pts.push(r); flush(cur); pts = [r]; cur = c; }
+    else pts.push(r);
+  }
+  flush(cur);
+
+  /* Bumper hits and lifts are worth seeing wherever they happened. */
+  for (const r of rows) {
+    if (r.bump) L.circleMarker([r.lat, r.lon], { radius: 5, color: "#f94144", weight: 2, fillOpacity: .6 })
+                  .bindPopup(popupHtml(r, track)).addTo(eventLayer);
+    if (r.lift) L.circleMarker([r.lat, r.lon], { radius: 5, color: "#b5179e", weight: 2, fillOpacity: .6 })
+                  .bindPopup(popupHtml(r, track)).addTo(eventLayer);
+  }
+
+  const first = rows[0], last = rows[rows.length - 1];
+  L.circleMarker([first.lat, first.lon],
+    { radius: 7, color: "#fff", weight: 2, fillColor: "#43aa8b", fillOpacity: 1 })
+    .bindPopup("<b>Start</b><br>" + popupHtml(first, track)).addTo(markerLayer);
+  L.circleMarker([last.lat, last.lon],
+    { radius: 7, color: "#fff", weight: 2, fillColor: "#f94144", fillOpacity: 1 })
+    .bindPopup("<b>End</b><br>" + popupHtml(last, track)).addTo(markerLayer);
+}
+
+let cursorMarker = null;
+
+function redraw(fit) {
+  trackLayer.clearLayers();
+  eventLayer.clearLayers();
+  markerLayer.clearLayers();
+  cursorMarker = null;
+
+  const shown = selected();
+  const mode = effectiveMode();
+  const drawn = [];
+  for (const t of shown) {
+    const rows = view(t);                  /* only the selected time window */
+    if (rows.length > 1) { drawTrack(t, rows, mode); drawn.push(rows); }
+  }
+
+  document.getElementById("legend").innerHTML = shown.length ? legendFor(mode, shown) : "";
+  renderList();
+  renderStats();
+
+  if (fit && drawn.length) {
+    /* Cap the auto-fit: a track a few metres long would otherwise slam into
+       MAX_ZOOM and show nothing but upscaled tile mush. */
+    map.fitBounds(L.latLngBounds(drawn.flat().map(r => [r.lat, r.lon])).pad(0.05),
+                  { maxZoom: 20 });
+  }
+}
+
+/* ------------------------------------------------------------- sidebar --- */
+
+function renderList() {
+  const ul = document.getElementById("files");
+  ul.innerHTML = "";
+
+  for (const t of TRACKS) {
+    const li = document.createElement("li");
+    li.className = (t.on ? "on " : "") + (t.key === activeKey ? "active" : "");
+    li.title = t.url || t.name;
+
+    const meta = t.rows ? `${t.rows.length} pts` : (t.loading ? "loading…" : "");
+    li.innerHTML =
+      `<span class="swatch" style="background:${t.on ? t.color : "#3a424b"}"></span>` +
+      `<span class="name">${t.name}</span><span class="meta">${meta}</span>`;
+
+    li.addEventListener("click", () => toggle(t));
+    ul.appendChild(li);
+  }
+
+  if (!TRACKS.length) {
+    ul.innerHTML = `<li class="meta" style="cursor:default">No logs listed yet.</li>`;
+  }
+}
+
+/* The file the stats box, the scrubber and the graph all follow: whichever was
+   clicked last, or the last one still shown. */
+function statsTarget() {
+  const shown = selected();
+  const active = byKey(activeKey);
+  return (active && active.on && active.rows) ? active : shown[shown.length - 1];
+}
+
+function renderStats() {
+  const box = document.getElementById("statsBox");
+  const shown = selected();
+  const target = statsTarget();
+
+  chartTrack = target || null;
+  if (!target || !view(target).length) { box.classList.add("hidden"); drawChart(); return; }
+  box.classList.remove("hidden");
+  document.getElementById("statsTitle").textContent = target.name;
+
+  const rows = view(target), first = rows[0], last = rows[rows.length - 1];
+  const soc = rows.filter(r => r.soc != null);
+  const dist = pathLength(rows);
+  const line = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
+
+  document.getElementById("stats").innerHTML =
+    line("Samples", rows.length) +
+    line("Duration", (first.t != null && last.t != null) ? fmtDuration(last.t - first.t) : "?") +
+    line("Path length", dist > 1000 ? (dist / 1000).toFixed(2) + " km" : dist.toFixed(0) + " m") +
+    line("Battery", soc.length ? `${soc[0].soc} % &rarr; ${soc[soc.length - 1].soc} %` : "?") +
+    line("Bump / lift", `${rows.filter(r => r.bump).length} / ${rows.filter(r => r.lift).length}`) +
+    (shown.length > 1 ? line("Shown", `${shown.length} files`) : "");
+
+  const slider = document.getElementById("slider");
+  slider.max = rows.length - 1;
+  if (+slider.value > rows.length - 1) slider.value = 0;
+  updateCursor(target, +slider.value);
+}
+
+function updateCursor(track, i) {
+  const r = view(track)[i];
+  if (!r) return;
+  chartIndex = i;
+  drawChart();
+  if (cursorMarker) markerLayer.removeLayer(cursorMarker);
+  cursorMarker = L.circleMarker([r.lat, r.lon],
+    { radius: 6, color: "#fff", weight: 2, fillColor: "#4cc9f0", fillOpacity: 1 }).addTo(markerLayer);
+
+  const line = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
+  document.getElementById("cursor").innerHTML =
+    line("Time", r.iso.replace("T", " ").replace("Z", "")) +
+    line("State / SoC", `${r.state ?? "?"} / ${r.soc ?? "?"} %`) +
+    line("Sats / HDOP", `${r.sats ?? "?"} / ${r.hdop ?? "?"}`) +
+    line("Wire L/R/near", `${r.wire_left ?? "?"} / ${r.wire_right ?? "?"} / ${r.near_wire ?? "?"}`);
+}
+
+/* ---------------------------------------------------------------- graph -- */
+/* Time on x, one channel on y, for the file the stats box is following. */
+
+const CHANNELS = {
+  soc:   { label: "Battery SoC", unit: " %", lo: 0, hi: 100, get: r => r.soc },
+  sats:  { label: "Satellites",  unit: "",   lo: 0,          get: r => r.sats },
+  hdop:  { label: "HDOP",        unit: "",   lo: 0,          get: r => r.hdop },
+  state: { label: "State",       unit: "",   lo: 0, tick: 1, get: r => r.state }
+};
+
+const PAD = { l: 42, r: 8, t: 8, b: 18 };
+
+const chartCanvas = document.getElementById("chartCanvas");
+let chartTrack = null;      /* track being graphed                      */
+let chartIndex = 0;         /* row index the scrub cursor sits on       */
+let chartPts   = [];        /* {x, y, i} in canvas pixels, for hit test */
+let chartGeom  = null;      /* {x0, x1, y0, y1, t0, t1} pixels <-> time */
+let brush      = null;      /* {from, to} canvas x while dragging       */
+
+const hhmm   = t => new Date(t).toISOString().slice(11, 16);
+const hhmmss = t => new Date(t).toISOString().slice(11, 19);
+
+/* Zoomed in far enough that whole minutes would repeat? Then show seconds. */
+const SHORT_SPAN = 20 * 60000;
+const clock = (t, span) => span < SHORT_SPAN ? hhmmss(t) : hhmm(t);
+
+/* Round a raw step up to a 1 / 2 / 5 * 10^n value so the labels stay tidy. */
+function niceStep(raw) {
+  const p = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+  const n = (raw || 1) / p;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p;
+}
+
+function drawChart() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = chartCanvas.clientWidth, h = chartCanvas.clientHeight;
+  if (!w || !h) return;
+  chartCanvas.width = Math.round(w * dpr);
+  chartCanvas.height = Math.round(h * dpr);
+
+  const ctx = chartCanvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  chartPts = [];
+  chartGeom = null;
+
+  const valueEl = document.getElementById("chartValue");
+  document.getElementById("chartName").textContent = chartTrack ? chartTrack.name : "";
+  const zoomSpan = viewRange ? viewRange.t1 - viewRange.t0 : 0;
+  document.getElementById("chartZoom").textContent = !chartTrack ? ""
+    : viewRange ? `${clock(viewRange.t0, zoomSpan)}–${clock(viewRange.t1, zoomSpan)}` +
+                  ` · right-click to reset`
+    : "drag to zoom";
+  valueEl.innerHTML = "";
+
+  const note = msg => {
+    ctx.fillStyle = "#78828c";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(msg, w / 2, h / 2);
+  };
+  if (!chartTrack) { note("Show a log file to graph it"); return; }
+
+  const ch = CHANNELS[document.getElementById("channel").value] || CHANNELS.soc;
+  const rows = view(chartTrack);
+  const data = [];
+  for (let i = 0; i < rows.length; i++) {
+    const v = ch.get(rows[i]);
+    if (rows[i].t != null && v != null && isFinite(v)) data.push({ t: rows[i].t, v, i });
+  }
+  if (data.length < 2) { note(`No ${ch.label.toLowerCase()} samples in this log`); return; }
+
+  const t0 = data[0].t, t1 = data[data.length - 1].t;
+  let lo = ch.lo != null ? ch.lo : Math.min(...data.map(d => d.v));
+  let hi = ch.hi != null ? ch.hi : Math.max(...data.map(d => d.v));
+  if (ch.hi == null) hi = Math.max(hi, lo + 1) * 1.05;
+  if (hi <= lo) hi = lo + 1;
+
+  const x0 = PAD.l, x1 = w - PAD.r, y0 = PAD.t, y1 = h - PAD.b;
+  const px = t => x0 + (t1 > t0 ? (t - t0) / (t1 - t0) : 0.5) * (x1 - x0);
+  const py = v => y1 - (v - lo) / (hi - lo) * (y1 - y0);
+  chartGeom = { x0, x1, y0, y1, t0, t1 };
+
+  /* grid + labels */
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.strokeStyle = "#2b3238"; ctx.lineWidth = 1;
+  ctx.fillStyle = "#78828c";
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  const step = ch.tick || niceStep((hi - lo) / 5);
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) {
+    const y = Math.round(py(v)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    ctx.fillText(String(+v.toFixed(3)) + ch.unit, x0 - 5, y);
+  }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  const span = t1 - t0;
+  const ticks = Math.max(2, Math.min(8, Math.floor((x1 - x0) / (span < SHORT_SPAN ? 80 : 70))));
+  for (let k = 0; k <= ticks; k++) {
+    const t = t0 + span * k / ticks, x = Math.round(px(t)) + 0.5;
+    ctx.strokeStyle = "#232930";
+    ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
+    ctx.fillText(clock(t, span), x, y1 + 3);
+  }
+  ctx.strokeStyle = "#3a424b";
+  ctx.beginPath(); ctx.moveTo(x0 + .5, y0); ctx.lineTo(x0 + .5, y1 + .5); ctx.lineTo(x1, y1 + .5);
+  ctx.stroke();
+
+  /* the trace itself, broken wherever the log has a gap */
+  ctx.strokeStyle = chartTrack.color; ctx.lineWidth = 1.5;
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  ctx.beginPath();
+  let pen = false;
+  for (let k = 0; k < data.length; k++) {
+    const d = data[k], x = px(d.t), y = py(d.v);
+    chartPts.push({ x, y, i: d.i });
+    if (pen && d.t - data[k - 1].t <= GAP_MS) ctx.lineTo(x, y);
+    else ctx.moveTo(x, y);
+    pen = true;
+  }
+  ctx.stroke();
+
+  /* scrub cursor, tied to the slider and the marker on the map */
+  const cur = rows[chartIndex];
+  if (cur && cur.t != null && cur.t >= t0 && cur.t <= t1) {
+    const x = Math.round(px(cur.t)) + 0.5;
+    ctx.strokeStyle = "#4cc9f0"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
+
+    const v = ch.get(cur);
+    if (v != null && isFinite(v)) {
+      ctx.fillStyle = "#4cc9f0";
+      ctx.beginPath(); ctx.arc(x, py(v), 3, 0, Math.PI * 2); ctx.fill();
+    }
+    valueEl.innerHTML = `${clock(cur.t, span)} &middot; <b>${v == null ? "?" : v}${ch.unit}</b>`;
+  }
+
+  /* the range being dragged out right now */
+  if (brush) {
+    const a = Math.min(brush.from, brush.to), b = Math.max(brush.from, brush.to);
+    ctx.fillStyle = "rgba(76, 201, 240, .18)";
+    ctx.fillRect(a, y0, b - a, y1 - y0);
+    ctx.strokeStyle = "#4cc9f0"; ctx.lineWidth = 1;
+    ctx.strokeRect(Math.round(a) + .5, y0 + .5, Math.round(b - a), y1 - y0 - 1);
+    const ta = pxToTime(a), tb = pxToTime(b);
+    valueEl.innerHTML = `${clock(ta, tb - ta)} – ${clock(tb, tb - ta)}`;
+  }
+}
+
+const canvasX = ev => ev.clientX - chartCanvas.getBoundingClientRect().left;
+
+/* Canvas x -> time, clamped to the plotted window. */
+function pxToTime(x) {
+  const g = chartGeom;
+  const f = Math.max(0, Math.min(1, (x - g.x0) / (g.x1 - g.x0)));
+  return g.t0 + f * (g.t1 - g.t0);
+}
+
+/* A click without a drag just moves the scrub cursor, as the slider does. */
+function scrubTo(x) {
+  if (!chartTrack || !chartPts.length) return;
+  let best = chartPts[0];
+  for (const p of chartPts) if (Math.abs(p.x - x) < Math.abs(best.x - x)) best = p;
+  document.getElementById("slider").value = best.i;
+  updateCursor(chartTrack, best.i);
+}
+
+/* Narrow to a time window. Each selection is taken inside the current one, so
+   dragging repeatedly keeps zooming in; right-click goes back to the whole log. */
+function zoomToRange(t0, t1) {
+  if (!chartTrack) return;
+  const lo = Math.min(t0, t1), hi = Math.max(t0, t1);
+  const kept = chartTrack.rows.filter(r => r.t != null && r.t >= lo && r.t <= hi);
+  if (kept.length < 2) return;                 /* too thin to be useful */
+  viewRange = { t0: lo, t1: hi };
+  document.getElementById("slider").value = 0;
+  chartIndex = 0;
+  redraw(true);
+}
+
+function resetRange() {
+  if (!viewRange) return;
+  viewRange = null;
+  document.getElementById("slider").value = 0;
+  chartIndex = 0;
+  redraw(true);
+}
+
+const DRAG_PX = 4;          /* shorter than this counts as a click, not a drag */
+
+chartCanvas.addEventListener("pointerdown", e => {
+  if (e.button !== 0 || !chartGeom) return;
+  chartCanvas.setPointerCapture(e.pointerId);
+  const x = canvasX(e);
+  brush = { from: x, to: x };
+  drawChart();
+});
+
+chartCanvas.addEventListener("pointermove", e => {
+  if (!brush) return;
+  brush.to = canvasX(e);
+  drawChart();
+});
+
+chartCanvas.addEventListener("pointerup", e => {
+  if (!brush) return;
+  const { from, to } = brush;
+  brush = null;
+  if (Math.abs(to - from) < DRAG_PX) { drawChart(); scrubTo(from); }
+  else zoomToRange(pxToTime(from), pxToTime(to));
+});
+
+chartCanvas.addEventListener("pointercancel", () => { brush = null; drawChart(); });
+
+chartCanvas.addEventListener("contextmenu", e => { e.preventDefault(); resetRange(); });
+
+document.getElementById("channel").addEventListener("change", drawChart);
+new ResizeObserver(() => drawChart()).observe(chartCanvas);
+
+/* -------------------------------------------------------------- loading -- */
+
+const statusEl = document.getElementById("status");
+function say(msg, isError) {
+  statusEl.textContent = msg;
+  statusEl.className = isError ? "error" : "";
+}
+
+const CORS_HINT =
+  " — if this page is not served from the same host as the logs the browser blocks the" +
+  " request (lighttpd sends no CORS header). Copy this file into /mower/ and open it" +
+  " from there, or pick the .csv files with the file chooser.";
+
+async function fetchRows(track) {
+  if (track.file) return parseCsv(await track.file.text());
+  const res = await fetch(track.url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  return parseCsv(await res.text());
+}
+
+async function toggle(track) {
+  /* A different set of files means a different time span — start from all of
+     it rather than keeping a window that may not overlap the new log at all. */
+  viewRange = null;
+
+  if (track.on) {                       /* clicking a shown file hides it */
+    track.on = false;
+    if (activeKey === track.key) activeKey = null;
+    redraw(false);
+    return;
+  }
+
+  activeKey = track.key;
+
+  if (!track.rows) {
+    track.loading = true;
+    renderList();
+    say("Loading " + track.name + " …");
+    try {
+      const { rows, skipped } = await fetchRows(track);
+      track.loading = false;
+      if (!rows.length) { say("No usable rows in " + track.name, true); renderList(); return; }
+      track.rows = rows;
+      say(`${track.name}: ${rows.length} samples` + (skipped ? `, ${skipped} rows skipped` : ""));
+    } catch (e) {
+      track.loading = false;
+      say("Could not load " + track.name + ": " + e.message + CORS_HINT, true);
+      renderList();
+      return;
+    }
+  }
+
+  track.on = true;
+  redraw(true);
+}
+
+/* Directory listing: accepts a JSON array of names, or an HTML index whose
+   links point at the .csv files (lighttpd dir-listing, nginx autoindex, …). */
+async function listDirectory(dirUrl, quiet) {
+  const hint = document.getElementById("hint");
+  if (!dirUrl.endsWith("/")) dirUrl += "/";
+  if (!quiet) say("Listing " + dirUrl + " …");
+  hint.textContent = "";
+
+  /* A failed automatic listing at start-up only gets a quiet note, so it does
+     not bury the status of the log that is being loaded at the same time. */
+  const fail = msg => {
+    if (quiet) hint.textContent = "— listing unavailable";
+    else say(msg, true);
+  };
+
+  let text, contentType;
+  try {
+    const res = await fetch(dirUrl, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    contentType = res.headers.get("content-type") || "";
+    text = await res.text();
+  } catch (e) {
+    fail("Directory listing unavailable: " + e.message +
+         " — add logs by URL or with the file chooser." + CORS_HINT);
+    return;
+  }
+
+  let names = [];
+  if (contentType.includes("json") || text.trim().startsWith("[")) {
+    try {
+      names = JSON.parse(text).map(e => typeof e === "string" ? e : (e.name || e.file || ""));
+    } catch { /* fall through to HTML parsing */ }
+  }
+  if (!names.length) {
+    const doc = new DOMParser().parseFromString(text, "text/html");
+    names = [...doc.querySelectorAll("a[href]")]
+      .map(a => a.getAttribute("href"))
+      .filter(h => h && /\.csv(\?|$)/i.test(h))
+      .map(h => h.split("/").pop());
+  }
+
+  names = [...new Set(names.filter(Boolean))].sort().reverse();   /* newest first */
+  if (!names.length) {
+    fail("No .csv files found at " + dirUrl + " (directory listing may be disabled).");
+    renderList();
+    return;
+  }
+
+  for (const name of names) addTrack({ key: dirUrl + name, name, url: dirUrl + name });
+  if (!quiet) say(`${names.length} log file(s) listed. Click one to show it.`);
+  renderList();
+}
+
+/* --------------------------------------------------------------- events -- */
+
+document.getElementById("refresh").addEventListener("click",
+  () => listDirectory(document.getElementById("dir").value.trim()));
+
+document.getElementById("add").addEventListener("click", () => {
+  const url = document.getElementById("url").value.trim();
+  if (!url) return;
+  const t = addTrack({ key: url, name: url.split("/").pop() || url, url });
+  document.getElementById("url").value = "";
+  renderList();
+  if (!t.on) toggle(t);
+});
+document.getElementById("url").addEventListener("keydown",
+  e => { if (e.key === "Enter") document.getElementById("add").click(); });
+
+document.getElementById("file").addEventListener("change", e => {
+  for (const f of e.target.files) {
+    const t = addTrack({ key: "file:" + f.name + ":" + f.size, name: f.name, file: f });
+    if (!t.on) toggle(t);
+  }
+});
+
+document.getElementById("colorBy").addEventListener("change", () => redraw(false));
+
+document.getElementById("slider").addEventListener("input", e => {
+  const target = statsTarget();
+  if (target) updateCursor(target, +e.target.value);
+});
+
+/* ----------------------------------------------------------- start-up ---- */
+/* ?log=<url> shows that log; ?dir=<url> lists that directory instead. */
+
+const params = new URLSearchParams(location.search);
+const DEFAULT_LOG = "http://192.168.1.127:1080/mower/mowerlog_20260809_08_22_22.csv";
+
+if (params.get("dir")) document.getElementById("dir").value = params.get("dir");
+
+const startLogs = params.getAll("log");            /* ?log= may repeat */
+if (!startLogs.length) startLogs.push(DEFAULT_LOG);
+
+const startTracks = startLogs.map(url =>
+  addTrack({ key: url, name: url.split("/").pop() || url, url }));
+renderList();
+
+(async () => {
+  await listDirectory(document.getElementById("dir").value.trim(), true);
+  for (const t of startTracks) await toggle(t);
+})();
+</script>
+</body>
+</html>
