@@ -80,21 +80,13 @@
   <section>
     <h1>Mower logs</h1>
     <div class="row">
-      <input type="text" id="dir" spellcheck="false" value="http://192.168.1.127:1080/mower/">
-      <button id="refresh" title="List the .csv files in that directory">List</button>
-    </div>
-    <div class="row">
-      <input type="text" id="url" spellcheck="false" placeholder="…or a single log URL">
-      <button id="add">Add</button>
-    </div>
-    <div class="row">
       <input type="file" id="file" accept=".csv,text/csv" multiple style="flex:1;min-width:0">
     </div>
     <div id="status">Ready.</div>
   </section>
 
   <section class="grow">
-    <h2>Files <span id="hint" class="meta"></span></h2>
+    <h2>Files</h2>
     <ul id="files"></ul>
   </section>
 
@@ -345,10 +337,20 @@ function pathLength(rows) {
   return d;
 }
 
+/* Logs are timestamped UTC; every time shown is the browser's local zone. */
+const pad2 = n => String(n).padStart(2, "0");
+const hhmm   = t => { const d = new Date(t); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+const hhmmss = t => `${hhmm(t)}:${pad2(new Date(t).getSeconds())}`;
+const stamp  = r => {
+  if (r.t == null) return r.iso;
+  const d = new Date(r.t);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${hhmmss(r.t)}`;
+};
+
 function popupHtml(r, track) {
   return [
     `<b>${track.name}</b>`,
-    r.iso,
+    stamp(r),
     `${r.lat.toFixed(7)}, ${r.lon.toFixed(7)}`,
     `state ${r.state ?? "?"} &middot; battery ${r.soc ?? "?"} %`,
     `fix ${r.fix_quality ?? "?"} / mode ${r.fix_mode ?? "?"} &middot; ${r.sats ?? "?"} sats` +
@@ -500,7 +502,7 @@ function updateCursor(track, i) {
 
   const line = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
   document.getElementById("cursor").innerHTML =
-    line("Time", r.iso.replace("T", " ").replace("Z", "")) +
+    line("Time", stamp(r)) +
     line("State / SoC", `${r.state ?? "?"} / ${r.soc ?? "?"} %`) +
     line("Sats / HDOP", `${r.sats ?? "?"} / ${r.hdop ?? "?"}`) +
     line("Wire L/R/near", `${r.wire_left ?? "?"} / ${r.wire_right ?? "?"} / ${r.near_wire ?? "?"}`);
@@ -524,9 +526,6 @@ let chartIndex = 0;         /* row index the scrub cursor sits on       */
 let chartPts   = [];        /* {x, y, i} in canvas pixels, for hit test */
 let chartGeom  = null;      /* {x0, x1, y0, y1, t0, t1} pixels <-> time */
 let brush      = null;      /* {from, to} canvas x while dragging       */
-
-const hhmm   = t => new Date(t).toISOString().slice(11, 16);
-const hhmmss = t => new Date(t).toISOString().slice(11, 19);
 
 /* Zoomed in far enough that whole minutes would repeat? Then show seconds. */
 const SHORT_SPAN = 20 * 60000;
@@ -732,10 +731,8 @@ function say(msg, isError) {
   statusEl.className = isError ? "error" : "";
 }
 
-const CORS_HINT =
-  " — if this page is not served from the same host as the logs the browser blocks the" +
-  " request (lighttpd sends no CORS header). Copy this file into /mower/ and open it" +
-  " from there, or pick the .csv files with the file chooser.";
+const WORKLOG_DIR = "worklogs/";
+const CORS_HINT = " — or pick the .csv files with the file chooser.";
 
 async function fetchRows(track) {
   if (track.file) return parseCsv(await track.file.text());
@@ -782,18 +779,10 @@ async function toggle(track) {
 
 /* Directory listing: accepts a JSON array of names, or an HTML index whose
    links point at the .csv files (lighttpd dir-listing, nginx autoindex, …). */
-async function listDirectory(dirUrl, quiet) {
-  const hint = document.getElementById("hint");
-  if (!dirUrl.endsWith("/")) dirUrl += "/";
-  if (!quiet) say("Listing " + dirUrl + " …");
-  hint.textContent = "";
-
-  /* A failed automatic listing at start-up only gets a quiet note, so it does
-     not bury the status of the log that is being loaded at the same time. */
-  const fail = msg => {
-    if (quiet) hint.textContent = "— listing unavailable";
-    else say(msg, true);
-  };
+async function listDirectory() {
+  const dirUrl = WORKLOG_DIR;
+  say("Listing " + dirUrl + " …");
+  const fail = msg => say(msg, true);
 
   let text, contentType;
   try {
@@ -802,8 +791,7 @@ async function listDirectory(dirUrl, quiet) {
     contentType = res.headers.get("content-type") || "";
     text = await res.text();
   } catch (e) {
-    fail("Directory listing unavailable: " + e.message +
-         " — add logs by URL or with the file chooser." + CORS_HINT);
+    fail("Directory listing unavailable: " + e.message + CORS_HINT);
     return;
   }
 
@@ -829,25 +817,11 @@ async function listDirectory(dirUrl, quiet) {
   }
 
   for (const name of names) addTrack({ key: dirUrl + name, name, url: dirUrl + name });
-  if (!quiet) say(`${names.length} log file(s) listed. Click one to show it.`);
+  say(`${names.length} log file(s) listed. Click one to show it.`);
   renderList();
 }
 
 /* --------------------------------------------------------------- events -- */
-
-document.getElementById("refresh").addEventListener("click",
-  () => listDirectory(document.getElementById("dir").value.trim()));
-
-document.getElementById("add").addEventListener("click", () => {
-  const url = document.getElementById("url").value.trim();
-  if (!url) return;
-  const t = addTrack({ key: url, name: url.split("/").pop() || url, url });
-  document.getElementById("url").value = "";
-  renderList();
-  if (!t.on) toggle(t);
-});
-document.getElementById("url").addEventListener("keydown",
-  e => { if (e.key === "Enter") document.getElementById("add").click(); });
 
 document.getElementById("file").addEventListener("change", e => {
   for (const f of e.target.files) {
@@ -864,23 +838,16 @@ document.getElementById("slider").addEventListener("input", e => {
 });
 
 /* ----------------------------------------------------------- start-up ---- */
-/* ?log=<url> shows that log; ?dir=<url> lists that directory instead. */
+/* ?log=<name> shows those logs; otherwise the newest listed one. */
 
-const params = new URLSearchParams(location.search);
-const DEFAULT_LOG = "http://192.168.1.127:1080/mower/mowerlog_20260809_08_22_22.csv";
-
-if (params.get("dir")) document.getElementById("dir").value = params.get("dir");
-
-const startLogs = params.getAll("log");            /* ?log= may repeat */
-if (!startLogs.length) startLogs.push(DEFAULT_LOG);
-
-const startTracks = startLogs.map(url =>
-  addTrack({ key: url, name: url.split("/").pop() || url, url }));
+const startTracks = new URLSearchParams(location.search).getAll("log")
+  .map(name => addTrack({ key: WORKLOG_DIR + name, name, url: WORKLOG_DIR + name }));
 renderList();
 
 (async () => {
-  await listDirectory(document.getElementById("dir").value.trim(), true);
-  for (const t of startTracks) await toggle(t);
+  await listDirectory();
+  const initial = startTracks.length ? startTracks : TRACKS.slice(0, 1);
+  for (const t of initial) await toggle(t);
 })();
 </script>
 </body>
