@@ -122,6 +122,9 @@
         <option value="soc">Battery SoC</option>
         <option value="sats">Satellites used</option>
         <option value="hdop">HDOP</option>
+        <option value="wifi">Wifi signal</option>
+        <option value="volt">Battery voltage</option>
+        <option value="current">Charge current</option>
         <option value="state">Mower state</option>
       </select>
       <span id="chartName"></span>
@@ -168,8 +171,14 @@ const eventLayer  = L.layerGroup().addTo(map);   /* bump / lift markers      */
 const markerLayer = L.layerGroup().addTo(map);   /* start, end, scrub cursor */
 
 /* ------------------------------------------------------ log file parsing -- */
-/* Format per logformat.txt: 16 comma separated fields per sample, rows
-   starting with # ignored, an empty field means the value was not known. */
+/* Format per logformat.txt. Rows starting with # are ignored, an empty field
+   means the value was not known. v2 rows start with the fieldtype, v1 rows
+   start with the timestamp, so the first field tells the two apart. */
+
+const V1 = { iso: 0, lat: 1, ns: 2, lon: 3, ew: 4, fix_quality: 5, fix_mode: 6, sats: 7, hdop: 8,
+             state: 9, soc: 10, bump: 11, lift: 12, wire_right: 13, wire_left: 14, near_wire: 15 };
+const V2 = { iso: 1, lat: 2, ns: 3, lon: 4, ew: 5, fix_quality: 6, sats: 7, hdop: 8, wifi: 9,
+             state: 10, soc: 11, bump: 12, lift: 13, wire_right: 14, wire_left: 15, near_wire: 16 };
 
 /* NMEA ddmm.mmmmm / dddmm.mmmmm -> signed decimal degrees. */
 function nmeaToDeg(value, hemisphere) {
@@ -186,25 +195,30 @@ const num = s => (s === undefined || s.trim() === "") ? null : Number(s);
 function parseCsv(text) {
   const rows = [];
   let skipped = 0;
+  let volt = null, current = null;   /* fieldtype 2, carried onto the rows that follow */
 
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (line === "" || line.startsWith("#")) continue;
 
     const f = line.split(",");
-    if (f.length < 16) { skipped++; continue; }
+    if (f[0] === "2" && f.length >= 4) { volt = num(f[2]); current = num(f[3]); continue; }
+    if (/^[0-9]{1,3}$/.test(f[0]) && f[0] !== "1") continue;   /* v2 fieldtype we do not read */
 
-    const lat = nmeaToDeg(f[1], f[2]);
-    const lon = nmeaToDeg(f[3], f[4]);
+    const c = f[0] === "1" ? V2 : V1;
+    if (f.length < (c === V2 ? 17 : 16)) { skipped++; continue; }
+
+    const lat = nmeaToDeg(f[c.lat], f[c.ns]);
+    const lon = nmeaToDeg(f[c.lon], f[c.ew]);
     if (!isFinite(lat) || !isFinite(lon)) { skipped++; continue; }   /* position unknown */
 
-    const t = Date.parse(f[0]);
+    const t = Date.parse(f[c.iso]);
     rows.push({
-      t: isFinite(t) ? t : null, iso: f[0], lat, lon,
-      fix_quality: num(f[5]), fix_mode: num(f[6]), sats: num(f[7]), hdop: num(f[8]),
-      state: num(f[9]), soc: num(f[10]),
-      bump: num(f[11]), lift: num(f[12]),
-      wire_right: num(f[13]), wire_left: num(f[14]), near_wire: num(f[15])
+      t: isFinite(t) ? t : null, iso: f[c.iso], lat, lon,
+      fix_quality: num(f[c.fix_quality]), fix_mode: num(f[c.fix_mode]), sats: num(f[c.sats]), hdop: num(f[c.hdop]),
+      wifi: num(f[c.wifi]), state: num(f[c.state]), soc: num(f[c.soc]), volt, current,
+      bump: num(f[c.bump]), lift: num(f[c.lift]),
+      wire_right: num(f[c.wire_right]), wire_left: num(f[c.wire_left]), near_wire: num(f[c.near_wire])
     });
   }
   return { rows, skipped };
@@ -508,6 +522,9 @@ function updateCursor(track, i) {
     line("Time", stamp(r)) +
     line("State / SoC", `${r.state ?? "?"} / ${r.soc ?? "?"} %`) +
     line("Sats / HDOP", `${r.sats ?? "?"} / ${r.hdop ?? "?"}`) +
+    line("Wifi", r.wifi == null ? "?" : `${r.wifi} dBm`) +
+    (r.volt == null && r.current == null ? ""
+      : line("Battery", `${r.volt ?? "?"} V / ${r.current ?? "?"} A`)) +
     line("Wire L/R/near", `${r.wire_left ?? "?"} / ${r.wire_right ?? "?"} / ${r.near_wire ?? "?"}`);
 }
 
@@ -518,6 +535,9 @@ const CHANNELS = {
   soc:   { label: "Battery SoC", unit: " %", lo: 0, hi: 100, get: r => r.soc },
   sats:  { label: "Satellites",  unit: "",   lo: 0,          get: r => r.sats },
   hdop:  { label: "HDOP",        unit: "",   lo: 0,          get: r => r.hdop },
+  wifi:  { label: "Wifi signal", unit: " dBm", lo: -100, hi: 0, get: r => r.wifi },
+  volt:    { label: "Battery voltage", unit: " V", get: r => r.volt },
+  current: { label: "Charge current", unit: " A", lo: 0, get: r => r.current },
   state: { label: "State",       unit: "",   lo: 0, tick: 1, get: r => r.state }
 };
 
