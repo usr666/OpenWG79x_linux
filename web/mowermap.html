@@ -157,7 +157,10 @@ const sat = L.tileLayer(
   maxZoom: MAX_ZOOM, maxNativeZoom: 18, attribution: "Imagery &copy; Esri"
 });
 sat.addTo(map);
-L.control.layers({ "Satellite": sat, "OpenStreetMap": osm }, null, { position: "topright" }).addTo(map);
+/* All layers are overlays, not base layers, so every one is a checkbox and the
+   imagery can be switched off entirely. */
+const layerControl =
+  L.control.layers(null, { "Satellite": sat, "OpenStreetMap": osm }, { position: "topright" }).addTo(map);
 L.control.scale({ imperial: false }).addTo(map);
 
 const trackLayer  = L.layerGroup().addTo(map);   /* the coloured paths       */
@@ -821,6 +824,90 @@ async function listDirectory() {
   renderList();
 }
 
+/* --------------------------------------------------------- own layers -- */
+/* One .json per layer in layers/, listed the same way the logs are:
+     line   {name, coords:[[lat,lon],…], color, weight, opacity, show}
+     image  {name, image:"file.png", corners:[tl,tr,bl], opacity, show}
+   Three corners place a rotated image; two are read as [sw, ne]. */
+
+const LAYER_DIR = "layers/";
+
+const RotatedImage = L.Layer.extend({
+  initialize(url, corners, options) {
+    this._url = url;
+    this._corners = corners.map(c => L.latLng(c));
+    L.Util.setOptions(this, options);
+  },
+
+  onAdd(map) {
+    this._img = L.DomUtil.create("img", "", map.getPanes().overlayPane);
+    this._img.style.position = "absolute";
+    this._img.style.transformOrigin = "0 0";
+    this._img.style.opacity = this.options.opacity ?? 1;
+    this._img.onload = () => this._place();
+    this._img.src = this._url;
+    map.on("zoomend viewreset", this._place, this);
+    this._place();
+  },
+
+  onRemove(map) {
+    L.DomUtil.remove(this._img);
+    map.off("zoomend viewreset", this._place, this);
+  },
+
+  /* Map the image's own pixel box onto the three corners: (0,0)->tl,
+     (w,0)->tr, (0,h)->bl, which is exactly a CSS matrix(). */
+  _place() {
+    if (!this._map || !this._img.naturalWidth) return;
+    const [tl, tr, bl] = this._corners.map(c => this._map.latLngToLayerPoint(c));
+    const w = this._img.naturalWidth, h = this._img.naturalHeight;
+    const m = [(tr.x - tl.x) / w, (tr.y - tl.y) / w,
+               (bl.x - tl.x) / h, (bl.y - tl.y) / h, tl.x, tl.y];
+    this._img.style.transform = `matrix(${m.join(",")})`;
+  }
+});
+
+function buildLayer(def) {
+  if (def.image) {
+    let c = def.corners;
+    if (c && c.length === 2) c = [[c[1][0], c[0][1]], [c[1][0], c[1][1]], [c[0][0], c[0][1]]];
+    if (!c || c.length !== 3) return null;
+    return new RotatedImage(LAYER_DIR + def.image, c, { opacity: def.opacity ?? 1 });
+  }
+  if (def.coords && def.coords.length > 1) {
+    return L.polyline(def.coords, {
+      color: def.color || "#f9c74f", weight: def.weight || 2,
+      opacity: def.opacity ?? 0.9, lineJoin: "round"
+    });
+  }
+  return null;
+}
+
+async function loadLayers() {
+  let text;
+  try {
+    const res = await fetch(LAYER_DIR, { cache: "no-store" });
+    if (!res.ok) return;                       /* no layers/ directory: fine */
+    text = await res.text();
+  } catch { return; }
+
+  const doc = new DOMParser().parseFromString(text, "text/html");
+  const files = [...new Set([...doc.querySelectorAll("a[href]")]
+    .map(a => a.getAttribute("href"))
+    .filter(h => h && /\.json(\?|$)/i.test(h))
+    .map(h => h.split("/").pop()))].sort();
+
+  for (const f of files) {
+    try {
+      const def = await (await fetch(LAYER_DIR + f, { cache: "no-store" })).json();
+      const layer = buildLayer(def);
+      if (!layer) continue;
+      layerControl.addOverlay(layer, def.name || f.replace(/\.json$/i, ""));
+      if (def.show) layer.addTo(map);
+    } catch { /* a layer that will not load must not stop the others */ }
+  }
+}
+
 /* --------------------------------------------------------------- events -- */
 
 document.getElementById("file").addEventListener("change", e => {
@@ -848,6 +935,7 @@ renderList();
   await listDirectory();
   const initial = startTracks.length ? startTracks : TRACKS.slice(0, 1);
   for (const t of initial) await toggle(t);
+  await loadLayers();
 })();
 </script>
 </body>
