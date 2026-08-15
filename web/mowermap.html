@@ -60,6 +60,7 @@
   #files .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; background: #3a424b; }
   #files .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #files .meta { color: #78828c; font-size: 11px; }
+  #files .reload { padding: 0 5px; line-height: 1.4; color: #9aa4ae; }
 
   #status { color: #9aa4ae; min-height: 1.4em; }
   #status.error { color: #ff8080; }
@@ -77,17 +78,16 @@
 <body>
 
 <div id="sidebar">
-  <section>
-    <h1>Mower logs</h1>
-    <div class="row">
-      <input type="file" id="file" accept=".csv,text/csv" multiple style="flex:1;min-width:0">
-    </div>
-    <div id="status">Ready.</div>
+  <section class="row" style="align-items:center;margin-bottom:0">
+    <h1 style="margin:0;flex:1">Worklogs</h1>
+    <button id="refresh" title="Reload the list of worklogs">Refresh</button>
   </section>
 
   <section class="grow">
-    <h2>Files</h2>
     <ul id="files"></ul>
+    <button id="load" style="margin-top:8px">Load file…</button>
+    <input type="file" id="file" accept=".csv,text/csv" multiple class="hidden">
+    <div id="status" class="hidden"></div>
   </section>
 
   <section>
@@ -100,6 +100,7 @@
       <option value="wire">Colour by: wire sensors</option>
       <option value="hdop">Colour by: HDOP</option>
       <option value="sats">Colour by: satellites used</option>
+      <option value="wifi">Colour by: wifi signal</option>
       <option value="fix">Colour by: fix quality</option>
       <option value="time">Colour by: time</option>
     </select>
@@ -145,9 +146,10 @@
    Half-steps so the last few levels are not a huge jump. */
 const MAX_ZOOM = 26;
 
+/* keyboard off: the arrow keys step the scrub cursor, they do not pan the map. */
 const map = L.map("map", {
   preferCanvas: true, maxZoom: MAX_ZOOM, zoomSnap: 0.5, zoomDelta: 0.5,
-  wheelPxPerZoomLevel: 120
+  wheelPxPerZoomLevel: 120, keyboard: false
 }).setView([60.574, 15.631], 18);
 
 const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -269,6 +271,7 @@ function colorFn(mode, track, rows) {
     };
     case "hdop":      return r => r.hdop == null ? GREY : ramp(HEAT, 1 - (r.hdop - 0.5) / 2.5);
     case "sats":      return r => r.sats == null ? GREY : ramp(HEAT, (r.sats - 4) / 26);
+    case "wifi":      return r => r.wifi == null ? GREY : ramp(HEAT, (r.wifi + 80) / 30);
     case "fix":       return r => FIX_COLORS[r.fix_quality] || GREY;
     case "time":      return r => (t1 > t0 && r.t != null) ? ramp(TIME, (r.t - t0) / (t1 - t0)) : GREY;
     default:          return () => track.color;
@@ -296,6 +299,7 @@ function legendFor(mode, tracks) {
                                    ["#f94144", "both outside"]]);
     case "hdop":      return gradient([...HEAT].reverse(), "HDOP 0.5", "3.0+");
     case "sats":      return gradient(HEAT, "4 sats", "30 sats");
+    case "wifi":      return gradient(HEAT, "-80 dBm", "-50 dBm");
     case "fix": {
       const names = { 1: "GPS", 2: "DGPS", 3: "PPS", 4: "RTK fixed", 5: "RTK float", 6: "dead reckoning" };
       const seen = [...new Set(rows.map(r => r.fix_quality).filter(q => q != null))].sort((a, b) => a - b);
@@ -317,6 +321,9 @@ let viewRange = null;          /* {t0, t1} in epoch ms                    */
 
 const inView = r => !viewRange || (r.t != null && r.t >= viewRange.t0 && r.t <= viewRange.t1);
 const view = track => viewRange ? track.rows.filter(inView) : track.rows;
+
+/* Set when the next render should jump the cursor to the newest sample. */
+let selectEnd = false;
 
 const selected = () => TRACKS.filter(t => t.on && t.rows && t.rows.length);
 const byKey = k => TRACKS.find(t => t.key === k);
@@ -460,9 +467,11 @@ function renderList() {
     const meta = t.rows ? `${t.rows.length} pts` : (t.loading ? "loading…" : "");
     li.innerHTML =
       `<span class="swatch" style="background:${t.on ? t.color : "#3a424b"}"></span>` +
-      `<span class="name">${t.name}</span><span class="meta">${meta}</span>`;
+      `<span class="name">${t.name}</span><span class="meta">${meta}</span>` +
+      `<button class="reload" title="Reload this file">&#x21bb;</button>`;
 
     li.addEventListener("click", () => toggle(t));
+    li.querySelector(".reload").addEventListener("click", e => { e.stopPropagation(); reload(t); });
     ul.appendChild(li);
   }
 
@@ -504,7 +513,8 @@ function renderStats() {
 
   const slider = document.getElementById("slider");
   slider.max = rows.length - 1;
-  if (+slider.value > rows.length - 1) slider.value = 0;
+  if (selectEnd || +slider.value > rows.length - 1) slider.value = rows.length - 1;
+  selectEnd = false;
   updateCursor(target, +slider.value);
 }
 
@@ -702,16 +712,14 @@ function zoomToRange(t0, t1) {
   const kept = chartTrack.rows.filter(r => r.t != null && r.t >= lo && r.t <= hi);
   if (kept.length < 2) return;                 /* too thin to be useful */
   viewRange = { t0: lo, t1: hi };
-  document.getElementById("slider").value = 0;
-  chartIndex = 0;
+  selectEnd = true;
   redraw(true);
 }
 
 function resetRange() {
   if (!viewRange) return;
   viewRange = null;
-  document.getElementById("slider").value = 0;
-  chartIndex = 0;
+  selectEnd = true;
   redraw(true);
 }
 
@@ -748,10 +756,11 @@ new ResizeObserver(() => drawChart()).observe(chartCanvas);
 
 /* -------------------------------------------------------------- loading -- */
 
+/* Only failures are worth sidebar space; progress and counts stay in the list. */
 const statusEl = document.getElementById("status");
 function say(msg, isError) {
-  statusEl.textContent = msg;
-  statusEl.className = isError ? "error" : "";
+  statusEl.textContent = isError ? msg : "";
+  statusEl.className = isError ? "error" : "hidden";
 }
 
 const WORKLOG_DIR = "worklogs/";
@@ -797,7 +806,28 @@ async function toggle(track) {
   }
 
   track.on = true;
+  selectEnd = true;                     /* a freshly shown file opens at its newest sample */
   redraw(true);
+}
+
+/* Re-read one file from the server; a log that is still being written grows.
+   Sitting on the newest sample means follow the new end, otherwise stay put. */
+async function reload(track) {
+  const shownRows = track === statsTarget() ? view(track) : null;
+  const wasLast = !!shownRows && +document.getElementById("slider").value >= shownRows.length - 1;
+
+  track.loading = true;
+  renderList();
+  try {
+    const { rows } = await fetchRows(track);
+    track.rows = rows.length ? rows : track.rows;
+  } catch (e) {
+    say("Could not reload " + track.name + ": " + e.message, true);
+  }
+  track.loading = false;
+  selectEnd = wasLast;
+  redraw(false);
+  renderList();
 }
 
 /* Directory listing: accepts a JSON array of names, or an HTML index whose
@@ -930,6 +960,10 @@ async function loadLayers() {
 
 /* --------------------------------------------------------------- events -- */
 
+document.getElementById("load").addEventListener("click", () => document.getElementById("file").click());
+
+document.getElementById("refresh").addEventListener("click", () => listDirectory());
+
 document.getElementById("file").addEventListener("change", e => {
   for (const f of e.target.files) {
     const t = addTrack({ key: "file:" + f.name + ":" + f.size, name: f.name, file: f });
@@ -942,6 +976,22 @@ document.getElementById("colorBy").addEventListener("change", () => redraw(false
 document.getElementById("slider").addEventListener("input", e => {
   const target = statsTarget();
   if (target) updateCursor(target, +e.target.value);
+});
+
+/* Left / right arrow steps the scrub cursor one sample, unless a form control
+   has focus and wants the key itself. */
+document.addEventListener("keydown", e => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  const tag = (e.target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "select" || tag === "textarea") return;
+
+  const target = statsTarget();
+  if (!target) return;
+  const rows = view(target);
+  const i = Math.max(0, Math.min(rows.length - 1, chartIndex + (e.key === "ArrowRight" ? 1 : -1)));
+  document.getElementById("slider").value = i;
+  updateCursor(target, i);
+  e.preventDefault();
 });
 
 /* ----------------------------------------------------------- start-up ---- */
