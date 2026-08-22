@@ -20,10 +20,13 @@
 
 #include "gps.h"
 #include "mowercom.h"
+#include "tcpcom.h"
 
 #define DEFAULT_UART_DEVICE "/dev/ttyUSB0"
 
 #define SAMPLES_PER_FILE 50000
+
+#define LOG_LINE_MAX 256
 
 #define LOG_HEADER \
 	"#version 2\n" \
@@ -74,12 +77,10 @@ static int wifi_signal(void)
 	return level;
 }
 
-/*
- * One line per sample. Append-only, so the file is never in a broken state:
- * losing power costs at most the line being written.
- */
 static void log_write_sample(FILE *f, const nmea_gga_t *gga, const nmea_rmc_t *rmc, const msg_mower_status_t *st)
 {
+	char line[LOG_LINE_MAX];
+	char status[64];
 	char time_utc[32];
 	char wifi[8] = "";
 	int level = wifi_signal();
@@ -88,18 +89,18 @@ static void log_write_sample(FILE *f, const nmea_gga_t *gga, const nmea_rmc_t *r
 	if (level)
 		snprintf(wifi, sizeof(wifi), "%d", level);
 
-	fprintf(f, "1,%s,%s,%s,%s,%s,%s,%s,%s,%s,", time_utc, gga->lat, gga->ns, gga->lon, gga->ew, gga->quality, gga->sats, gga->hdop, wifi);
-
 	/* The two status bytes are unpacked into one column per bit. */
 	if (st)
-		fprintf(f, "%u,%u,%u,%u,%u,%u,%u\n", st->state, st->battery_soc, (st->sensor_status >> 0) & 1, (st->sensor_status >> 1) & 1, (st->wire_sensor_status >> 0) & 1, (st->wire_sensor_status >> 1) & 1, (st->wire_sensor_status >> 2) & 1);
+		snprintf(status, sizeof(status), "%u,%u,%u,%u,%u,%u,%u", st->state, st->battery_soc, (st->sensor_status >> 0) & 1, (st->sensor_status >> 1) & 1, (st->wire_sensor_status >> 0) & 1, (st->wire_sensor_status >> 1) & 1, (st->wire_sensor_status >> 2) & 1);
 	else
-		fprintf(f, ",,,,,,\n");	/* no status frame yet */
+		snprintf(status, sizeof(status), ",,,,,,");	/* no status frame yet */
 
+	snprintf(line, sizeof(line), "1,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n", time_utc, gga->lat, gga->ns, gga->lon, gga->ew, gga->quality, gga->sats, gga->hdop, wifi, status);
+
+	fputs(line, f);
 	fflush(f);
+	tcpcom_broadcast(line);
 }
-
-/* --- main --------------------------------------------------------------- */
 
 static volatile sig_atomic_t stop;
 
@@ -120,7 +121,7 @@ int main(int argc, char **argv)
 	nmea_gga_t gga = { 0 };
 	nmea_rmc_t rmc = { 0 };
 	unsigned long samples = 0, file_samples = 0;
-	int uart_fd, gps_fd;
+	int uart_fd, gps_fd, tcp_fd;
 	FILE *log;
 
 	signal(SIGINT, on_signal);
@@ -151,11 +152,15 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	printf("openwg79x_rc: uart=%s log=%s\n", uart_device, log_path);
+	tcp_fd = tcpcom_open();
+	if (tcp_fd < 0)
+		fprintf(stderr, "no live feed - logging to file only\n");
+
+	printf("openwg79x_rc: uart=%s log=%s tcp=%d\n", uart_device, log_path, TCPCOM_PORT);
 
 	while (!stop) {
-		struct pollfd fds[2];
-		int nfds = 0, uart_idx, gps_idx = -1;
+		struct pollfd fds[3];
+		int nfds = 0, uart_idx, gps_idx = -1, tcp_idx = -1;
 
 		uart_idx = nfds;
 		fds[nfds].fd = uart_fd;
@@ -165,6 +170,13 @@ int main(int argc, char **argv)
 		if (gps_fd >= 0) {
 			gps_idx = nfds;
 			fds[nfds].fd = gps_fd;
+			fds[nfds].events = POLLIN;
+			nfds++;
+		}
+
+		if (tcp_fd >= 0) {
+			tcp_idx = nfds;
+			fds[nfds].fd = tcp_fd;
 			fds[nfds].events = POLLIN;
 			nfds++;
 		}
@@ -223,10 +235,13 @@ int main(int argc, char **argv)
 			}
 		}
 
+		if (tcp_idx >= 0 && (fds[tcp_idx].revents & POLLIN))
+			tcpcom_accept();
 	}
 
 	if (log)
 		fclose(log);
+	tcpcom_close();
 	gps_close();
 	mowercom_close();
 

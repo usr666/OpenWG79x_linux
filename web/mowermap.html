@@ -46,6 +46,10 @@
   select { width: 100%; }
   button { cursor: pointer; white-space: nowrap; }
   button:hover { background: #2c323a; }
+  button:disabled { color: #5a636c; border-color: #2b3238; cursor: default; }
+  button:disabled:hover { background: #22262b; }
+  button.on { background: #23303a; border-color: #4cc9f0; color: #4cc9f0; }
+  button.wait { border-color: #f9c74f; color: #f9c74f; }
   input[type=range] { width: 100%; }
 
   /* ---- file list ---- */
@@ -80,6 +84,7 @@
 <div id="sidebar">
   <section class="row" style="align-items:center;margin-bottom:0">
     <h1 style="margin:0;flex:1">Worklogs</h1>
+    <button id="live" title="Append live samples to the shown file">Live</button>
     <button id="refresh" title="Reload the list of worklogs">Refresh</button>
   </section>
 
@@ -139,6 +144,29 @@
 <script>
 "use strict";
 
+/* -------------------------------------------------------- remembered ----- */
+/* Kept in localStorage, so it is per browser and per host. Logs picked with
+   Load file… are left out: the browser will not re-read a local file unasked. */
+
+const STORE_KEY = "mowermap.v1";
+const isFile = k => k.startsWith("file:");
+
+const STATE = (() => {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
+})();
+
+function saveState() {
+  const state = {
+    known: OVERLAYS.map(o => o.name),
+    layers: OVERLAYS.filter(o => map.hasLayer(o.layer)).map(o => o.name),
+    logs: TRACKS.filter(t => t.on && !isFile(t.key)).map(t => t.key),
+    active: activeKey && !isFile(activeKey) ? activeKey : null,
+    colorBy: document.getElementById("colorBy").value,
+    channel: document.getElementById("channel").value
+  };
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch { /* blocked or full */ }
+}
+
 /* ---------------------------------------------------------------- map ---- */
 
 /* Zoom past what the imagery supports: the tiles just get upscaled, but the
@@ -161,12 +189,26 @@ const sat = L.tileLayer(
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
   maxZoom: MAX_ZOOM, maxNativeZoom: 18, attribution: "Imagery &copy; Esri"
 });
-sat.addTo(map);
 /* All layers are overlays, not base layers, so every one is a checkbox and the
    imagery can be switched off entirely. */
-const layerControl =
-  L.control.layers(null, { "Satellite": sat, "OpenStreetMap": osm }, { position: "topright" }).addTo(map);
+const layerControl = L.control.layers(null, null, { position: "topright" }).addTo(map);
 L.control.scale({ imperial: false }).addTo(map);
+
+const OVERLAYS = [];   /* {name, layer} for every checkbox in the control */
+
+/* `show` is only the default: once the browser has seen a layer, the remembered
+   tick wins, so a newly added layer can still arrive switched on. */
+function addOverlay(layer, name, show) {
+  OVERLAYS.push({ name, layer });
+  layerControl.addOverlay(layer, name);
+  const known = (STATE.known || []).includes(name);
+  if (known ? (STATE.layers || []).includes(name) : show) layer.addTo(map);
+}
+
+addOverlay(sat, "Satellite", true);
+addOverlay(osm, "OpenStreetMap", false);
+
+map.on("overlayadd overlayremove", saveState);
 
 const trackLayer  = L.layerGroup().addTo(map);   /* the coloured paths       */
 const eventLayer  = L.layerGroup().addTo(map);   /* bump / lift markers      */
@@ -328,6 +370,11 @@ let selectEnd = false;
 const selected = () => TRACKS.filter(t => t.on && t.rows && t.rows.length);
 const byKey = k => TRACKS.find(t => t.key === k);
 
+/* The list as shown: newest name first. Sorted here rather than in TRACKS so a
+   refresh or a file picked by hand lands in place instead of at the end. */
+const listedTracks = () =>
+  [...TRACKS].sort((a, b) => b.name.localeCompare(a.name, undefined, { numeric: true }));
+
 function addTrack(t) {
   if (byKey(t.key)) return byKey(t.key);
   t.color = TRACK_COLORS[TRACKS.length % TRACK_COLORS.length];
@@ -459,7 +506,7 @@ function renderList() {
   const ul = document.getElementById("files");
   ul.innerHTML = "";
 
-  for (const t of TRACKS) {
+  for (const t of listedTracks()) {
     const li = document.createElement("li");
     li.className = (t.on ? "on " : "") + (t.key === activeKey ? "active" : "");
     li.title = t.url || t.name;
@@ -478,6 +525,8 @@ function renderList() {
   if (!TRACKS.length) {
     ul.innerHTML = `<li class="meta" style="cursor:default">No logs listed yet.</li>`;
   }
+
+  liveButton();   /* which file live samples would go to may have just changed */
 }
 
 /* The file the stats box, the scrubber and the graph all follow: whichever was
@@ -751,7 +800,7 @@ chartCanvas.addEventListener("pointercancel", () => { brush = null; drawChart();
 
 chartCanvas.addEventListener("contextmenu", e => { e.preventDefault(); resetRange(); });
 
-document.getElementById("channel").addEventListener("change", drawChart);
+document.getElementById("channel").addEventListener("change", () => { drawChart(); saveState(); });
 new ResizeObserver(() => drawChart()).observe(chartCanvas);
 
 /* -------------------------------------------------------------- loading -- */
@@ -782,6 +831,7 @@ async function toggle(track) {
     track.on = false;
     if (activeKey === track.key) activeKey = null;
     redraw(false);
+    saveState();
     return;
   }
 
@@ -808,6 +858,7 @@ async function toggle(track) {
   track.on = true;
   selectEnd = true;                     /* a freshly shown file opens at its newest sample */
   redraw(true);
+  saveState();
 }
 
 /* Re-read one file from the server; a log that is still being written grows.
@@ -952,13 +1003,111 @@ async function loadLayers() {
       const def = await (await fetch(LAYER_DIR + f, { cache: "no-store" })).json();
       const layer = buildLayer(def);
       if (!layer) continue;
-      layerControl.addOverlay(layer, def.name || f.replace(/\.json$/i, ""));
-      if (def.show) layer.addTo(map);
+      addOverlay(layer, def.name || f.replace(/\.json$/i, ""), def.show);
     } catch { /* a layer that will not load must not stop the others */ }
   }
+  saveState();                 /* record the layers now known to this browser */
 }
 
+/* ----------------------------------------------------------------- live -- */
+/* The mower feed is tunnelled to /webbsoket as raw log lines. The socket is
+   held only while Live is pressed, so a page left open costs the mower nothing.
+   Samples land in the file the scrubber follows, in memory only - nothing is
+   written back to the server. */
+
+const LIVE_URL = `wss://${location.host}/webbsoket`;
+const LIVE_RETRY_MS = 30000;   /* reopen a socket that closed or went quiet */
+const LIVE_STALE_MS = 5000;    /* no sample for this long: not reachable */
+
+let liveOn = false;
+let liveSocket = null;
+let liveRetry = null;
+let liveSeen = 0;              /* when the newest sample arrived */
+let liveTail = "";             /* frames split anywhere, so keep the part line */
+const liveDecoder = new TextDecoder();
+
+const liveUp = () => Date.now() - liveSeen < LIVE_STALE_MS;
+
+/* Pressed and receiving is "on", pressed and silent is "wait": the mower is
+   off or out of range, and the retry keeps trying until it answers. */
+function liveButton() {
+  const b = document.getElementById("live");
+  const target = statsTarget();
+
+  b.disabled = !target;
+  b.classList.toggle("on", liveOn && liveUp());
+  b.classList.toggle("wait", liveOn && !liveUp());
+  b.title = !target ? "Show a file first - live samples are appended to it"
+          : !liveOn ? "Append live samples to " + target.name
+          : liveUp() ? "Appending live samples to " + target.name
+          : "Waiting for the mower to answer";
+}
+
+/* Sitting on the newest sample means follow the new end, otherwise stay put. */
+function liveAppend(rows) {
+  const target = statsTarget();
+  if (!target) return false;
+
+  const last = target.rows[target.rows.length - 1];
+  const fresh = rows.filter(r => !last || r.t == null || last.t == null || r.t > last.t);
+  if (!fresh.length) return false;
+
+  const shown = view(target);
+  const wasLast = +document.getElementById("slider").value >= shown.length - 1;
+
+  target.rows.push(...fresh);
+  selectEnd = wasLast;
+  return true;
+}
+
+function liveMessage(data) {
+  const lines = (liveTail + liveDecoder.decode(data, { stream: true })).split("\n");
+
+  liveTail = lines.pop();
+  if (!lines.length) return;
+  liveSeen = Date.now();
+
+  /* One parse for the whole batch: fieldtype 2 carries onto the rows after it. */
+  const { rows } = parseCsv(lines.join("\n"));
+  if (liveOn && rows.length && liveAppend(rows)) redraw(false);
+  liveButton();
+}
+
+function liveConnect() {
+  liveRetry = null;
+  liveTail = "";
+  liveSocket = new WebSocket(LIVE_URL);
+  liveSocket.binaryType = "arraybuffer";
+  liveSocket.onopen = () => { liveSeen = Date.now(); liveButton(); };
+  liveSocket.onmessage = e => liveMessage(e.data);
+  liveSocket.onerror = () => liveSocket.close();
+  liveSocket.onclose = () => {
+    liveSocket = null;
+    if (liveOn) liveRetry = setTimeout(liveConnect, LIVE_RETRY_MS);
+    liveButton();
+  };
+}
+
+function liveDisconnect() {
+  clearTimeout(liveRetry);
+  liveRetry = null;
+  liveSeen = 0;
+  if (liveSocket) liveSocket.close();   /* onclose leaves it alone while liveOn is false */
+}
+
+/* A tunnel can stay open with nothing behind it, so silence recycles it. */
+setInterval(() => {
+  if (liveOn && liveSocket && liveSocket.readyState === WebSocket.OPEN && Date.now() - liveSeen > LIVE_RETRY_MS) liveSocket.close();
+  liveButton();
+}, 1000);
+
 /* --------------------------------------------------------------- events -- */
+
+document.getElementById("live").addEventListener("click", () => {
+  liveOn = !liveOn;
+  if (liveOn) liveConnect(); else liveDisconnect();
+  liveButton();
+});
 
 document.getElementById("load").addEventListener("click", () => document.getElementById("file").click());
 
@@ -971,7 +1120,7 @@ document.getElementById("file").addEventListener("change", e => {
   }
 });
 
-document.getElementById("colorBy").addEventListener("change", () => redraw(false));
+document.getElementById("colorBy").addEventListener("change", () => { redraw(false); saveState(); });
 
 document.getElementById("slider").addEventListener("input", e => {
   const target = statsTarget();
@@ -995,7 +1144,12 @@ document.addEventListener("keydown", e => {
 });
 
 /* ----------------------------------------------------------- start-up ---- */
-/* ?log=<name> shows those logs; otherwise the newest listed one. */
+/* ?log=<name> shows those logs, else what was shown last time, else the first
+   one in the list. Remembered logs that have since been rotated away are
+   dropped rather than reported. */
+
+if (STATE.colorBy) document.getElementById("colorBy").value = STATE.colorBy;
+if (STATE.channel) document.getElementById("channel").value = STATE.channel;
 
 const startTracks = new URLSearchParams(location.search).getAll("log")
   .map(name => addTrack({ key: WORKLOG_DIR + name, name, url: WORKLOG_DIR + name }));
@@ -1003,8 +1157,18 @@ renderList();
 
 (async () => {
   await listDirectory();
-  const initial = startTracks.length ? startTracks : TRACKS.slice(0, 1);
+
+  const remembered = (STATE.logs || []).map(byKey).filter(Boolean);
+  const initial = startTracks.length ? startTracks
+                : remembered.length ? remembered
+                : listedTracks().slice(0, 1);
   for (const t of initial) await toggle(t);
+
+  /* toggle() leaves the last one active; put the cursor back on the file that
+     had it, as long as that file actually came back. */
+  const active = byKey(STATE.active);
+  if (!startTracks.length && active && active.on) { activeKey = active.key; redraw(false); }
+
   await loadLayers();
 })();
 </script>
