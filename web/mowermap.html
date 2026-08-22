@@ -1076,7 +1076,9 @@ function liveMessage(data) {
 function liveConnect() {
   liveRetry = null;
   liveTail = "";
-  liveSocket = new WebSocket(LIVE_URL);
+  /* mod_wstunnel answers with Sec-WebSocket-Protocol: binary, and a browser
+     rejects a subprotocol it did not ask for, so ask for it. */
+  liveSocket = new WebSocket(LIVE_URL, "binary");
   liveSocket.binaryType = "arraybuffer";
   liveSocket.onopen = () => { liveSeen = Date.now(); liveButton(); };
   liveSocket.onmessage = e => liveMessage(e.data);
