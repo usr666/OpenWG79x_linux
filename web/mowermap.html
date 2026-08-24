@@ -600,7 +600,8 @@ const CHANNELS = {
   state: { label: "State",       unit: "",   lo: 0, tick: 1, get: r => r.state }
 };
 
-const PAD = { l: 42, r: 8, t: 8, b: 18 };
+/* r leaves room for half of the last hh:mm:ss label, which is centred on x1. */
+const PAD = { l: 42, r: 26, t: 8, b: 18 };
 
 const chartCanvas = document.getElementById("chartCanvas");
 let chartTrack = null;      /* track being graphed                      */
@@ -612,6 +613,35 @@ let brush      = null;      /* {from, to} canvas x while dragging       */
 /* Zoomed in far enough that whole minutes would repeat? Then show seconds. */
 const SHORT_SPAN = 20 * 60000;
 const clock = (t, span) => span < SHORT_SPAN ? hhmmss(t) : hhmm(t);
+
+/* Gridlines land on round clock times: whole minutes, quarter hours, whole
+   hours, midnight. Steps are the ones a clock is read in, not decimal ones. */
+const TICK_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200,
+                    10800, 21600, 43200, 86400].map(s => s * 1000);
+const DAY_MS = 86400000;
+const mmdd = t => { const d = new Date(t); return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+
+function tickStep(span, max) {
+  for (const s of TICK_STEPS) if (span / s <= max) return s;
+  return Math.ceil(span / max / DAY_MS) * DAY_MS;      /* whole days beyond that */
+}
+
+/* Aligned in local time, so an hour tick sits on the hour the labels show.
+   The offset is taken at t0; a window straddling a DST change drifts an hour. */
+function tickTimes(t0, t1, step) {
+  const off = new Date(t0).getTimezoneOffset() * 60000;
+  const out = [];
+  for (let t = Math.ceil((t0 - off) / step) * step + off; t <= t1; t += step) out.push(t);
+  return out;
+}
+
+/* Midnight reads as a date: 00:00 on its own says nothing about which day. */
+function tickLabel(t, step) {
+  const d = new Date(t);
+  if (step >= DAY_MS) return mmdd(t);
+  if (step < 60000) return hhmmss(t);
+  return d.getHours() === 0 && d.getMinutes() === 0 ? mmdd(t) : hhmm(t);
+}
 
 /* Round a raw step up to a 1 / 2 / 5 * 10^n value so the labels stay tidy. */
 function niceStep(raw) {
@@ -683,12 +713,12 @@ function drawChart() {
   }
   ctx.textAlign = "center"; ctx.textBaseline = "top";
   const span = t1 - t0;
-  const ticks = Math.max(2, Math.min(8, Math.floor((x1 - x0) / (span < SHORT_SPAN ? 80 : 70))));
-  for (let k = 0; k <= ticks; k++) {
-    const t = t0 + span * k / ticks, x = Math.round(px(t)) + 0.5;
+  const tstep = tickStep(span, Math.max(2, Math.min(8, Math.floor((x1 - x0) / 80))));
+  for (const t of tickTimes(t0, t1, tstep)) {
+    const x = Math.round(px(t)) + 0.5;
     ctx.strokeStyle = "#232930";
     ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
-    ctx.fillText(clock(t, span), x, y1 + 3);
+    ctx.fillText(tickLabel(t, tstep), x, y1 + 3);
   }
   ctx.strokeStyle = "#3a424b";
   ctx.beginPath(); ctx.moveTo(x0 + .5, y0); ctx.lineTo(x0 + .5, y1 + .5); ctx.lineTo(x1, y1 + .5);
@@ -861,6 +891,15 @@ async function toggle(track) {
   saveState();
 }
 
+/* The copy on the server is rsynced every minute, so it lags the live feed by a
+   minute or two. Anything we already hold past the end of the file came from the
+   feed and would be thrown away by a plain reload, so carry it over. */
+function withLiveTail(rows, had) {
+  const last = rows[rows.length - 1];
+  const tail = (had || []).filter(r => r.t != null && last.t != null && r.t > last.t);
+  return tail.length ? rows.concat(tail) : rows;
+}
+
 /* Re-read one file from the server; a log that is still being written grows.
    Sitting on the newest sample means follow the new end, otherwise stay put. */
 async function reload(track) {
@@ -871,7 +910,7 @@ async function reload(track) {
   renderList();
   try {
     const { rows } = await fetchRows(track);
-    track.rows = rows.length ? rows : track.rows;
+    track.rows = rows.length ? withLiveTail(rows, track.rows) : track.rows;
   } catch (e) {
     say("Could not reload " + track.name + ": " + e.message, true);
   }
@@ -1054,8 +1093,16 @@ function liveAppend(rows) {
 
   const shown = view(target);
   const wasLast = +document.getElementById("slider").value >= shown.length - 1;
+  const atEnd = !!viewRange && !!last && last.t != null && viewRange.t1 >= last.t;
+  const newest = fresh[fresh.length - 1].t;
 
   target.rows.push(...fresh);
+
+  /* A window zoomed onto the end of the log would otherwise keep showing the
+     same samples while new ones pile up past its right edge. Slide it along,
+     keeping the width the zoom asked for. */
+  if (wasLast && atEnd && newest > viewRange.t1) viewRange = { t0: viewRange.t0 + (newest - viewRange.t1), t1: newest };
+
   selectEnd = wasLast;
   return true;
 }
