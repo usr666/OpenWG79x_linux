@@ -117,6 +117,7 @@ int main(int argc, char **argv)
 	char default_log[64];
 
 	static uint8_t msgbuf[MAX_MSG_SIZE];
+	static uint8_t cmdbuf[MAX_FRAME_SIZE];
 	msg_mower_status_t status = { 0 };
 	nmea_gga_t gga = { 0 };
 	nmea_rmc_t rmc = { 0 };
@@ -159,8 +160,9 @@ int main(int argc, char **argv)
 	printf("openwg79x_rc: uart=%s log=%s tcp=%d\n", uart_device, log_path, TCPCOM_PORT);
 
 	while (!stop) {
-		struct pollfd fds[3];
-		int nfds = 0, uart_idx, gps_idx = -1, tcp_idx = -1;
+		struct pollfd fds[2 + TCPCOM_MAX_FDS];
+		int tcpfds[TCPCOM_MAX_FDS];
+		int nfds = 0, uart_idx, gps_idx = -1, ntcp, i;
 
 		uart_idx = nfds;
 		fds[nfds].fd = uart_fd;
@@ -174,9 +176,9 @@ int main(int argc, char **argv)
 			nfds++;
 		}
 
-		if (tcp_fd >= 0) {
-			tcp_idx = nfds;
-			fds[nfds].fd = tcp_fd;
+		ntcp = tcpcom_fds(tcpfds);
+		for (i = 0; i < ntcp; i++) {
+			fds[nfds].fd = tcpfds[i];
 			fds[nfds].events = POLLIN;
 			nfds++;
 		}
@@ -235,8 +237,14 @@ int main(int argc, char **argv)
 			}
 		}
 
-		if (tcp_idx >= 0 && (fds[tcp_idx].revents & POLLIN))
+		/* Commands from tcp clients are echoed to the mower uart. */
+		if (tcp_fd >= 0) {
+			int n;
+
 			tcpcom_accept();
+			while ((n = tcpcom_read(cmdbuf, sizeof(cmdbuf))) > 0)
+				mowercom_write(cmdbuf, (size_t)n);
+		}
 	}
 
 	if (log)

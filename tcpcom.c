@@ -1,5 +1,6 @@
 /*
- * tcpcom - sends a copy of every log line to connected TCP clients.
+ * tcpcom - sends a copy of every log line to connected TCP clients and collects
+ * unescaped command frames from them.
  */
 #define _DEFAULT_SOURCE
 
@@ -19,6 +20,12 @@ static int clients[TCPCOM_MAX_CLIENTS];
 static void set_nonblock(int fd)
 {
 	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+}
+
+static void drop_client(int i)
+{
+	close(clients[i]);
+	clients[i] = -1;
 }
 
 int tcpcom_open(void)
@@ -54,6 +61,21 @@ int tcpcom_open(void)
 	return listen_fd;
 }
 
+int tcpcom_fds(int *fds)
+{
+	int n = 0, i;
+
+	if (listen_fd < 0)
+		return 0;
+
+	fds[n++] = listen_fd;
+	for (i = 0; i < TCPCOM_MAX_CLIENTS; i++) {
+		if (clients[i] >= 0)
+			fds[n++] = clients[i];
+	}
+	return n;
+}
+
 void tcpcom_accept(void)
 {
 	int fd = accept(listen_fd, NULL, NULL);
@@ -73,6 +95,25 @@ void tcpcom_accept(void)
 	close(fd);	/* no free slot */
 }
 
+int tcpcom_read(uint8_t *data, size_t size)
+{
+	int i;
+
+	for (i = 0; i < TCPCOM_MAX_CLIENTS; i++) {
+		ssize_t n;
+
+		if (clients[i] < 0)
+			continue;
+
+		n = read(clients[i], data, size);
+		if (n > 0)
+			return (int)n;
+		if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK))
+			drop_client(i);
+	}
+	return 0;
+}
+
 void tcpcom_broadcast(const char *text)
 {
 	size_t len = strlen(text);
@@ -84,10 +125,8 @@ void tcpcom_broadcast(const char *text)
 	for (i = 0; i < TCPCOM_MAX_CLIENTS; i++) {
 		if (clients[i] < 0)
 			continue;
-		if (write(clients[i], text, len) != (ssize_t)len) {
-			close(clients[i]);
-			clients[i] = -1;
-		}
+		if (write(clients[i], text, len) != (ssize_t)len)
+			drop_client(i);
 	}
 }
 
@@ -96,10 +135,8 @@ void tcpcom_close(void)
 	int i;
 
 	for (i = 0; i < TCPCOM_MAX_CLIENTS; i++) {
-		if (clients[i] >= 0) {
-			close(clients[i]);
-			clients[i] = -1;
-		}
+		if (clients[i] >= 0)
+			drop_client(i);
 	}
 
 	if (listen_fd >= 0) {

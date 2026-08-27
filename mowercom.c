@@ -31,6 +31,8 @@ static char   uart_name[64];
 static frame_parser_t parser;
 static uint8_t rx[512];
 static size_t  rx_len, rx_pos;
+static size_t  tx_pos;			/* 0 START, 1 msg_id, 2 len, 3+ payload and crc */
+static size_t  tx_left;			/* payload + crc bytes still to escape */
 
 /* CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final xor */
 static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
@@ -158,6 +160,45 @@ int mowercom_read(uint8_t *msgid, void *data, size_t size, size_t *len)
 		}
 		rx_len = (size_t)n;
 	}
+}
+
+int mowercom_write(const uint8_t *data, size_t len)
+{
+	uint8_t wire[2 * MAX_FRAME_SIZE];
+	size_t n = 0, i;
+
+	if (uart_fd < 0 || len > MAX_FRAME_SIZE)
+		return -1;
+
+	for (i = 0; i < len; i++) {
+		uint8_t b = data[i];
+
+		if (tx_pos == 0) {		/* START goes out as is */
+			wire[n++] = b;
+			tx_pos++;
+			continue;
+		}
+
+		if (b == FRAME_START || b == FRAME_ESC) {
+			wire[n++] = FRAME_ESC;
+			wire[n++] = b ^ ESC_XOR;
+		} else {
+			wire[n++] = b;
+		}
+
+		if (tx_pos == 2)		/* LEN, payload + crc follow */
+			tx_left = (size_t)b + 2;
+		if (tx_pos < 3)
+			tx_pos++;
+		else if (--tx_left == 0)
+			tx_pos = 0;
+	}
+
+	if (write(uart_fd, wire, n) != (ssize_t)n) {
+		fprintf(stderr, "write %s: %s\n", uart_name, strerror(errno));
+		return -1;
+	}
+	return 0;
 }
 
 void mowercom_close(void)
