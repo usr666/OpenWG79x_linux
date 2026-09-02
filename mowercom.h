@@ -48,8 +48,8 @@ typedef struct {
 int  mowercom_open(const char *device);	/* opens uart, returns fd to poll, -1 on error */
 /* -1 uart error, 0 nothing complete yet, 1 message stored in msgid/data/len */
 int  mowercom_read(uint8_t *msgid, void *data, size_t size, size_t *len);
-/* Writes unescaped frames, each START as is and everything after it escaped. -1 on error. */
-int  mowercom_write(const uint8_t *data, size_t len);
+/* Builds one frame, appends the crc, escapes it and writes it to the uart. -1 on error. */
+int  mowercom_send(uint8_t msgid, const void *data, size_t len);
 void mowercom_close(void);
 
 #endif

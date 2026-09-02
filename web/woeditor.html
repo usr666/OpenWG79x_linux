@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workorder editor</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; font: 13px/1.4 system-ui, sans-serif; background: #14171a; color: #e6e6e6; }
+
+  #sidebar {
+    width: 300px; flex: none; display: flex; flex-direction: column;
+    background: #181b1f; border-right: 1px solid #2b3238; overflow: hidden;
+  }
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #map { flex: 1; min-height: 0; background: #14171a; }
+
+  /* ---- the workorder itself, along the bottom quarter of the window ---- */
+  #list {
+    height: 25%; flex: none; display: flex; flex-direction: column;
+    padding: 6px 8px 4px; background: #181b1f; border-top: 1px solid #2b3238;
+  }
+  #listHead { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  #listName { color: #9aa4ae; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #listInfo { margin-left: auto; color: #78828c; white-space: nowrap; }
+  #rows { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 0; }
+  #rows li {
+    display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 4px;
+    cursor: pointer; user-select: none; font-variant-numeric: tabular-nums;
+  }
+  #rows li:hover { background: #22262b; }
+  #rows li.on { background: #23303a; outline: 1px solid #4cc9f0; }
+  #rows .num { color: #78828c; width: 2.5em; text-align: right; flex: none; }
+  #rows .raw { color: #f9c74f; }
+  #rows .end { color: #78828c; font-style: italic; }
+
+  section { padding: 10px; border-bottom: 1px solid #2b3238; }
+  section.grow { flex: 1; min-height: 0; overflow-y: auto; border-bottom: none; }
+  h1 { font-size: 13px; margin: 0 0 8px; letter-spacing: .04em; text-transform: uppercase; color: #9aa4ae; }
+  h2 { font-size: 11px; margin: 0 0 6px; letter-spacing: .06em; text-transform: uppercase; color: #78828c; }
+
+  .row { display: flex; gap: 6px; margin-bottom: 6px; }
+  input, select, button {
+    background: #22262b; color: #e6e6e6; border: 1px solid #3a424b;
+    border-radius: 4px; padding: 5px 6px; font: inherit;
+  }
+  button { cursor: pointer; white-space: nowrap; }
+  button:hover { background: #2c323a; }
+  button:disabled { color: #5a636c; border-color: #2b3238; cursor: default; }
+  button:disabled:hover { background: #22262b; }
+  .row button { flex: 1; }
+
+  /* ---- one block per command ---- */
+  .cmd { margin-bottom: 12px; }
+  .cmd .field { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .cmd .field label { flex: 1; color: #9aa4ae; }
+  .cmd .field input, .cmd .field select { width: 90px; flex: none; }
+  .cmd.point .field input { width: 110px; }
+
+  #fileName { color: #9aa4ae; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status { color: #9aa4ae; min-height: 1.4em; }
+  #status.error { color: #ff8080; }
+  .hidden { display: none !important; }
+
+  /* ---- load picker ---- */
+  #loadDialog {
+    background: #181b1f; color: #e6e6e6; border: 1px solid #3a424b; border-radius: 6px;
+    padding: 10px; min-width: 240px; font: inherit;
+  }
+  #loadDialog::backdrop { background: rgba(0, 0, 0, .5); }
+  #loadList { list-style: none; margin: 0 0 8px; padding: 0; max-height: 50vh; overflow-y: auto; }
+  #loadList li { padding: 5px 6px; border-radius: 4px; cursor: pointer; user-select: none; }
+  #loadList li:hover { background: #22262b; }
+  #loadList li.none { color: #78828c; cursor: default; }
+  #loadList li.none:hover { background: none; }
+
+  .marker {
+    width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
+    background: #4cc9f0; color: #14171a; border: 1px solid #14171a;
+    font: 11px/17px system-ui, sans-serif; text-align: center; font-weight: 600;
+  }
+  .marker.on { background: #f9c74f; }
+  .marker.pending { background: none; border: 2px dashed #f9c74f; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <section>
+    <h1>File</h1>
+    <div class="row">
+      <button id="new">New</button>
+      <button id="load">Load…</button>
+    </div>
+    <div class="row">
+      <button id="save">Save</button>
+      <button id="saveas">Save as…</button>
+    </div>
+    <div class="row" style="margin-bottom:0">
+      <button id="download">Download</button>
+    </div>
+    <div id="fileName" style="margin-top:6px"></div>
+  </section>
+
+  <section class="grow">
+    <h1>Commands</h1>
+    <div id="commands"></div>
+  </section>
+
+  <section>
+    <div id="status" class="hidden"></div>
+  </section>
+</div>
+
+<dialog id="loadDialog">
+  <h2>Load workorder</h2>
+  <ul id="loadList"></ul>
+  <button id="loadCancel">Cancel</button>
+</dialog>
+
+<div id="main">
+  <div id="map"></div>
+  <div id="list">
+    <div id="listHead">
+      <span id="listName"></span>
+      <button id="delete">Delete row</button>
+      <span id="listInfo"></span>
+    </div>
+    <ol id="rows"></ol>
+  </div>
+</div>
+
+<script>
+/* Workorder editor: builds workorder/<name>.wo files - see workorder_format.txt.
+   Rows are inserted after the selected row, or at the end when the end marker
+   is selected. Saving PUTs the file back to the same directory it was listed
+   from, so the server must accept PUT (lighttpd mod_webdav). */
+
+/* -------------------------------------------------------------- state ---- */
+
+const STORE_KEY = "woeditor.v1";
+
+const STATE = (() => {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
+})();
+
+function saveState() {
+  const state = {
+    known: OVERLAYS.map(o => o.name),
+    layers: OVERLAYS.filter(o => map.hasLayer(o.layer)).map(o => o.name)
+  };
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch { /* blocked or full */ }
+}
+
+const statusEl = document.getElementById("status");
+function say(msg, isError) {
+  statusEl.textContent = msg || "";
+  statusEl.className = !msg ? "hidden" : isError ? "error" : "";
+}
+
+/* ---------------------------------------------------------------- map ---- */
+/* Same map as mowermap: every layer is a checkbox, and the imagery is upscaled
+   past the zoom the tiles have, because the work happens at centimetre scale. */
+
+const MAX_ZOOM = 26;
+
+const map = L.map("map", {
+  preferCanvas: true, maxZoom: MAX_ZOOM, zoomSnap: 0.5, zoomDelta: 0.5,
+  wheelPxPerZoomLevel: 120, keyboard: false
+}).setView([60.574, 15.631], 18);
+
+const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: MAX_ZOOM, maxNativeZoom: 19, attribution: "&copy; OpenStreetMap contributors"
+});
+const sat = L.tileLayer(
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+  maxZoom: MAX_ZOOM, maxNativeZoom: 18, attribution: "Imagery &copy; Esri"
+});
+
+const layerControl = L.control.layers(null, null, { position: "topright" }).addTo(map);
+L.control.scale({ imperial: false }).addTo(map);
+
+const OVERLAYS = [];   /* {name, layer} for every checkbox in the control */
+
+function addOverlay(layer, name, show) {
+  OVERLAYS.push({ name, layer });
+  layerControl.addOverlay(layer, name);
+  const known = (STATE.known || []).includes(name);
+  if (known ? (STATE.layers || []).includes(name) : show) layer.addTo(map);
+}
+
+addOverlay(sat, "Satellite", true);
+addOverlay(osm, "OpenStreetMap", false);
+
+map.on("overlayadd overlayremove", saveState);
+
+const pathLayer = L.layerGroup().addTo(map);     /* the run-to-point markers */
+
+/* --------------------------------------------------------- own layers -- */
+/* One .json per layer in layers/, exactly as mowermap reads them:
+     line   {name, coords:[[lat,lon],…], color, weight, opacity, show}
+     image  {name, image:"file.png", corners:[tl,tr,bl], opacity, show}
+   Three corners place a rotated image; two are read as [sw, ne]. */
+
+const LAYER_DIR = "layers/";
+
+const RotatedImage = L.Layer.extend({
+  initialize(url, corners, options) {
+    this._url = url;
+    this._corners = corners.map(c => L.latLng(c));
+    L.Util.setOptions(this, options);
+  },
+
+  onAdd(map) {
+    this._img = L.DomUtil.create("img", "", map.getPanes().overlayPane);
+    this._img.style.position = "absolute";
+    this._img.style.transformOrigin = "0 0";
+    this._img.style.opacity = this.options.opacity ?? 1;
+    this._img.onload = () => this._place();
+    this._img.src = this._url;
+    map.on("zoomend viewreset", this._place, this);
+    this._place();
+  },
+
+  onRemove(map) {
+    L.DomUtil.remove(this._img);
+    map.off("zoomend viewreset", this._place, this);
+  },
+
+  _place() {
+    if (!this._map || !this._img.naturalWidth) return;
+    const [tl, tr, bl] = this._corners.map(c => this._map.latLngToLayerPoint(c));
+    const w = this._img.naturalWidth, h = this._img.naturalHeight;
+    const m = [(tr.x - tl.x) / w, (tr.y - tl.y) / w,
+               (bl.x - tl.x) / h, (bl.y - tl.y) / h, tl.x, tl.y];
+    this._img.style.transform = `matrix(${m.join(",")})`;
+  }
+});
+
+function buildLayer(def) {
+  if (def.image) {
+    let c = def.corners;
+    if (c && c.length === 2) c = [[c[1][0], c[0][1]], [c[1][0], c[1][1]], [c[0][0], c[0][1]]];
+    if (!c || c.length !== 3) return null;
+    return new RotatedImage(LAYER_DIR + def.image, c, { opacity: def.opacity ?? 1 });
+  }
+  if (def.coords && def.coords.length > 1) {
+    return L.polyline(def.coords, {
+      color: def.color || "#f9c74f", weight: def.weight || 2,
+      opacity: def.opacity ?? 0.9, lineJoin: "round"
+    });
+  }
+  return null;
+}
+
+async function loadLayers() {
+  let text;
+  try {
+    const res = await fetch(LAYER_DIR, { cache: "no-store" });
+    if (!res.ok) return;                       /* no layers/ directory: fine */
+    text = await res.text();
+  } catch { return; }
+
+  const doc = new DOMParser().parseFromString(text, "text/html");
+  const files = [...new Set([...doc.querySelectorAll("a[href]")]
+    .map(a => a.getAttribute("href"))
+    .filter(h => h && /\.json(\?|$)/i.test(h))
+    .map(h => h.split("/").pop()))].sort();
+
+  for (const f of files) {
+    try {
+      const def = await (await fetch(LAYER_DIR + f, { cache: "no-store" })).json();
+      const layer = buildLayer(def);
+      if (!layer) continue;
+      addOverlay(layer, def.name || f.replace(/\.json$/i, ""), def.show);
+    } catch { /* a layer that will not load must not stop the others */ }
+  }
+  saveState();
+}
+
+/* ----------------------------------------------------------- commands -- */
+/* One block per command in workorder_format.txt. The fields are written in
+   file order, so a row is just [cmd, …field values]. */
+
+const YESNO = [["0", "no"], ["1", "yes"]];
+const EVENTS = [["0", "timeout only"], ["1", "turn complete"], ["2", "rtk float or fix"], ["3", "rtk fix"]];
+
+const COMMANDS = [
+  { id: 1, name: "Run", fields: [
+    { key: "left",  label: "Left speed %",  type: "num", min: -100, max: 100, def: 50 },
+    { key: "right", label: "Right speed %", type: "num", min: -100, max: 100, def: 50 },
+    { key: "disc",  label: "Disc speed %",  type: "num", min: -100, max: 100, def: 0 },
+    { key: "force", label: "Force run",     type: "sel", options: YESNO, def: "0" }
+  ]},
+  { id: 2, name: "Turn", fields: [
+    { key: "speed", label: "Wheel speed %", type: "num", min: -100, max: 100, def: 30 },
+    { key: "angle", label: "Turn angle °",  type: "num", min: 0, max: 255, def: 90 },
+    { key: "dir",   label: "Direction",     type: "sel", options: [["0", "left"], ["1", "right"]], def: "1" },
+    { key: "disc",  label: "Disc speed %",  type: "num", min: -100, max: 100, def: 0 },
+    { key: "force", label: "Force run",     type: "sel", options: YESNO, def: "0" }
+  ]},
+  { id: 3, name: "Wait", fields: [
+    { key: "event",   label: "Wait for",   type: "sel", options: EVENTS, def: "1" },
+    { key: "timeout", label: "Timeout s",  type: "num", min: 0, max: 255, def: 10 }
+  ]},
+  { id: 4, name: "Run to point", point: true, fields: [
+    { key: "lat", label: "Latitude",  type: "text", def: "" },
+    { key: "ns",  label: "N/S",       type: "sel", options: [["N", "N"], ["S", "S"]], def: "N" },
+    { key: "lon", label: "Longitude", type: "text", def: "" },
+    { key: "ew",  label: "E/W",       type: "sel", options: [["E", "E"], ["W", "W"]], def: "E" }
+  ]}
+];
+
+const byId = id => COMMANDS.find(c => c.id === id);
+
+function buildCommands() {
+  const box = document.getElementById("commands");
+
+  for (const cmd of COMMANDS) {
+    const block = document.createElement("div");
+
+    block.className = "cmd" + (cmd.point ? " point" : "");
+    block.innerHTML = `<h2>${cmd.id} — ${cmd.name}</h2>`;
+
+    for (const f of cmd.fields) {
+      const div = document.createElement("div");
+      const input = f.type === "sel"
+        ? `<select id="f${cmd.id}_${f.key}">` + f.options.map(o => `<option value="${o[0]}">${o[1]}</option>`).join("") + `</select>`
+        : `<input id="f${cmd.id}_${f.key}" type="${f.type === "num" ? "number" : "text"}"${f.type === "num" ? ` min="${f.min}" max="${f.max}"` : ""}>`;
+
+      div.className = "field";
+      div.innerHTML = `<label for="f${cmd.id}_${f.key}">${f.label}</label>${input}`;
+      block.appendChild(div);
+    }
+
+    const buttons = document.createElement("div");
+    buttons.className = "row";
+    buttons.innerHTML = `<button id="ins${cmd.id}">Insert</button><button id="rep${cmd.id}">Replace</button>`;
+    block.appendChild(buttons);
+    box.appendChild(block);
+
+    buttons.children[0].addEventListener("click", () => insertRow(cmd));
+    buttons.children[1].addEventListener("click", () => replaceRow(cmd));
+    setFields(cmd, cmd.fields.map(f => f.def));
+  }
+}
+
+const fieldEl = (cmd, f) => document.getElementById(`f${cmd.id}_${f.key}`);
+
+const getFields = cmd => cmd.fields.map(f => fieldEl(cmd, f).value.trim());
+
+function setFields(cmd, values) {
+  cmd.fields.forEach((f, i) => { fieldEl(cmd, f).value = values[i] ?? f.def; });
+}
+
+/* A row the mower would refuse is not worth writing to the file. */
+function checkFields(cmd, values) {
+  for (let i = 0; i < cmd.fields.length; i++) {
+    const f = cmd.fields[i];
+    const v = values[i];
+
+    if (v === "" || v.includes(",")) return f.label + " is empty";
+    if (f.type === "num" && !(Number.isInteger(+v) && +v >= f.min && +v <= f.max)) return `${f.label} must be ${f.min}..${f.max}`;
+    if (f.type === "text" && !/^\d+\.\d+$/.test(v)) return f.label + " must come from a click on the map";
+  }
+  return "";
+}
+
+/* --------------------------------------------------------------- rows -- */
+/* {cmd, values} for a command this editor knows, {raw} for anything else in a
+   loaded file - unknown rows are kept so that saving never drops them. */
+
+let rows = [];
+let selected = -1;         /* -1 is the end marker: new rows go last */
+let fileName = "";         /* the name it was loaded as, "" until saved */
+let dirty = false;
+
+function describe(row) {
+  if (row.raw) return row.raw;
+
+  const v = row.values;
+  const force = f => f === "1" ? ", force" : "";
+  const event = (EVENTS.find(e => e[0] === v[0]) || [, v[0]])[1];
+
+  switch (row.cmd) {
+    case 1: return `run  left ${v[0]}%  right ${v[1]}%  disc ${v[2]}%${force(v[3])}`;
+    case 2: return `turn ${v[1]}° ${v[2] === "1" ? "right" : "left"}  speed ${v[0]}%  disc ${v[3]}%${force(v[4])}`;
+    case 3: return v[0] === "0" ? `wait ${v[1]}s` : `wait for ${event}, timeout ${v[1]}s`;
+    case 4: return `point ${v[0]}${v[1]}  ${v[2]}${v[3]}`;
+  }
+  return "";
+}
+
+const rowText = row => row.raw ? row.raw : [row.cmd, ...row.values].join(",");
+
+function renderRows() {
+  const list = document.getElementById("rows");
+  const items = [];
+
+  rows.forEach((row, i) => {
+    const li = document.createElement("li");
+
+    li.innerHTML = `<span class="num">${i + 1}</span><span${row.raw ? ' class="raw"' : ""}></span>`;
+    li.lastChild.textContent = describe(row);
+    if (i === selected) li.className = "on";
+    li.addEventListener("click", () => select(i));
+    items.push(li);
+  });
+
+  const end = document.createElement("li");
+  end.innerHTML = `<span class="num"></span><span class="end">— end —</span>`;
+  if (selected === -1) end.className = "on";
+  end.addEventListener("click", () => select(-1));
+  items.push(end);
+
+  list.replaceChildren(...items);
+
+  const name = (fileName ? fileName + ".wo" : "Untitled") + (dirty ? " *" : "");
+
+  document.getElementById("fileName").textContent = name;
+  document.getElementById("listName").textContent = name;
+  document.getElementById("listInfo").textContent = `${rows.length} command(s), inserting ` + (selected < 0 ? "at the end" : "after row " + (selected + 1));
+  document.getElementById("delete").disabled = selected < 0;
+  drawPoints();
+}
+
+/* Selecting a row copies it into its command block, so it can be read, changed
+   and put back with Replace. */
+function select(i) {
+  selected = i;
+
+  const row = rows[i];
+  if (row && !row.raw) setFields(byId(row.cmd), row.values);
+  renderRows();
+}
+
+function change() {
+  dirty = true;
+  renderRows();
+}
+
+function insertRow(cmd) {
+  const values = getFields(cmd);
+  const bad = checkFields(cmd, values);
+
+  if (bad) { say(bad, true); return; }
+
+  const at = selected < 0 ? rows.length : selected + 1;
+  rows.splice(at, 0, { cmd: cmd.id, values });
+  selected = at;
+  if (cmd.point) point.lat = "";        /* the click is a row now */
+  say("");
+  change();
+}
+
+function replaceRow(cmd) {
+  const row = rows[selected];
+  const values = getFields(cmd);
+  const bad = checkFields(cmd, values);
+
+  if (!row) { say("Select a row to replace", true); return; }
+  if (bad) { say(bad, true); return; }
+
+  rows[selected] = { cmd: cmd.id, values };
+  if (cmd.point) point.lat = "";
+  say("");
+  change();
+}
+
+function deleteRow() {
+  if (selected < 0) return;
+  rows.splice(selected, 1);
+  selected = Math.min(selected, rows.length - 1);
+  change();
+}
+
+/* ------------------------------------------------------------- points -- */
+/* Positions are stored the way the mower reports them, verbatim NMEA
+   ddmm.mmmmm / dddmm.mmmmm, so nothing is lost converting back and forth. */
+
+const nmea = (deg, digits) => {
+  const d = Math.floor(Math.abs(deg));
+  const m = (Math.abs(deg) - d) * 60;
+  return String(d).padStart(digits, "0") + (m < 10 ? "0" : "") + m.toFixed(5);
+};
+
+const degrees = (value, hemi) => {
+  const v = parseFloat(value);
+  const d = Math.floor(v / 100);
+  return (d + (v - d * 100) / 60) * (hemi === "S" || hemi === "W" ? -1 : 1);
+};
+
+const point = { lat: "", ns: "N", lon: "", ew: "E" };   /* the pending click */
+
+function pointFields(latlng) {
+  const values = [nmea(latlng.lat, 2), latlng.lat < 0 ? "S" : "N", nmea(latlng.lng, 3), latlng.lng < 0 ? "W" : "E"];
+
+  setFields(byId(4), values);
+  Object.assign(point, { lat: values[0], ns: values[1], lon: values[2], ew: values[3] });
+  drawPoints();
+}
+
+function marker(latlng, text, cls, draggable) {
+  return L.marker(latlng, {
+    draggable,
+    icon: L.divIcon({ className: "", iconSize: null, html: `<div class="marker ${cls}">${text}</div>` })
+  });
+}
+
+function drawPoints() {
+  const coords = [];
+
+  pathLayer.clearLayers();
+
+  rows.forEach((row, i) => {
+    if (row.raw || row.cmd !== 4) return;
+
+    const latlng = L.latLng(degrees(row.values[0], row.values[1]), degrees(row.values[2], row.values[3]));
+    const m = marker(latlng, i + 1, i === selected ? "on" : "", true);
+
+    coords.push(latlng);
+    m.on("dragend", () => {
+      const p = m.getLatLng();
+      row.values = [nmea(p.lat, 2), p.lat < 0 ? "S" : "N", nmea(p.lng, 3), p.lng < 0 ? "W" : "E"];
+      if (i === selected) setFields(byId(4), row.values);
+      change();
+    });
+    m.addTo(pathLayer);
+  });
+
+  if (coords.length > 1) L.polyline(coords, { color: "#4cc9f0", weight: 2, opacity: .8, dashArray: "4 4" }).addTo(pathLayer);
+  if (point.lat) marker(L.latLng(degrees(point.lat, point.ns), degrees(point.lon, point.ew)), "", "pending", false).addTo(pathLayer);
+}
+
+map.on("click", e => pointFields(e.latlng));
+
+/* --------------------------------------------------------------- file -- */
+/* Files live in workorder/ on this server: listed from its directory index,
+   read with GET and written back with PUT. */
+
+const WORKORDER_DIR = "workorder/";
+const HEADER = "#version 1\n";
+
+const loadDialog = document.getElementById("loadDialog");
+
+function setFile(name, text) {
+  rows = [];
+  selected = -1;
+  fileName = name;
+  dirty = false;
+  point.lat = "";
+
+  for (const line of (text || "").split("\n")) {
+    const s = line.trim();
+    const f = s.split(",");
+    const cmd = byId(+f[0]);
+
+    if (!s || s.startsWith("#")) continue;
+    if (cmd && f.length === cmd.fields.length + 1) rows.push({ cmd: cmd.id, values: f.slice(1) });
+    else rows.push({ raw: s });
+  }
+  renderRows();
+}
+
+const fileText = () => HEADER + rows.map(rowText).join("\n") + (rows.length ? "\n" : "");
+
+const askDiscard = () => !dirty || confirm("The workorder has unsaved changes. Discard them?");
+
+async function fileNames() {
+  let text;
+  try {
+    const res = await fetch(WORKORDER_DIR, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    text = await res.text();
+  } catch (e) {
+    say("Workorder listing unavailable: " + e.message, true);
+    return [];
+  }
+
+  const doc = new DOMParser().parseFromString(text, "text/html");
+  const names = [...doc.querySelectorAll("a[href]")]
+    .map(a => a.getAttribute("href"))
+    .map(h => h ? decodeURIComponent(h.split("?")[0].split("/").pop()) : "")
+    .filter(n => /^[A-Za-z0-9_-]+\.wo$/.test(n))
+    .map(n => n.replace(/\.wo$/, ""));
+
+  return [...new Set(names)].sort();
+}
+
+function loadItem(text, name) {
+  const li = document.createElement("li");
+
+  li.textContent = text;
+  if (!name) li.className = "none";
+  else li.addEventListener("click", () => { loadDialog.close(); loadFile(name); });
+  return li;
+}
+
+async function loadOpen() {
+  const list = document.getElementById("loadList");
+
+  if (!askDiscard()) return;
+
+  list.replaceChildren(loadItem("Listing …"));
+  loadDialog.showModal();
+
+  const names = await fileNames();
+  if (!loadDialog.open) return;                /* cancelled while listing */
+
+  list.replaceChildren(...(names.length ? names.map(n => loadItem(n, n))
+                                        : [loadItem("No .wo files in " + WORKORDER_DIR)]));
+}
+
+async function loadFile(name) {
+  try {
+    const res = await fetch(WORKORDER_DIR + name + ".wo", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    setFile(name, await res.text());
+    say(name + " loaded");
+  } catch (e) {
+    say("Cannot load " + name + ": " + e.message, true);
+  }
+}
+
+async function saveFile(name) {
+  try {
+    const res = await fetch(WORKORDER_DIR + name + ".wo", {
+      method: "PUT", headers: { "Content-Type": "text/csv" }, body: fileText()
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  } catch (e) {
+    say("Cannot save " + name + ": " + e.message + " — the server must allow PUT in " + WORKORDER_DIR, true);
+    return;
+  }
+
+  fileName = name;
+  dirty = false;
+  say(name + " saved");
+  renderRows();
+}
+
+/* A copy in the browser's download folder; the server copy is untouched, so an
+   unsaved workorder stays unsaved. */
+function downloadFile() {
+  const a = document.createElement("a");
+  const url = URL.createObjectURL(new Blob([fileText()], { type: "text/csv" }));
+
+  a.href = url;
+  a.download = (fileName || "workorder") + ".wo";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);   /* the download reads it after the click */
+  say(a.download + " downloaded");
+}
+
+function saveAs() {
+  const name = prompt("Save workorder as", fileName || "");
+
+  if (name === null) return;
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) { say("A workorder name may hold a-z A-Z 0-9 _- only", true); return; }
+  saveFile(name);
+}
+
+/* ------------------------------------------------------------- events -- */
+
+document.getElementById("new").addEventListener("click", () => {
+  if (!askDiscard()) return;
+  setFile("", "");
+  say("");
+});
+
+document.getElementById("load").addEventListener("click", loadOpen);
+
+document.getElementById("loadCancel").addEventListener("click", () => loadDialog.close());
+
+document.getElementById("save").addEventListener("click", () => fileName ? saveFile(fileName) : saveAs());
+
+document.getElementById("saveas").addEventListener("click", saveAs);
+
+document.getElementById("download").addEventListener("click", downloadFile);
+
+document.getElementById("delete").addEventListener("click", deleteRow);
+
+addEventListener("beforeunload", e => { if (dirty) e.preventDefault(); });
+
+/* ----------------------------------------------------------- start-up -- */
+
+buildCommands();
+setFile("", "");
+loadLayers();
+</script>
+</body>
+</html>

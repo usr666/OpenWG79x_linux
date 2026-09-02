@@ -66,6 +66,19 @@
   #files .meta { color: #78828c; font-size: 11px; }
   #files .reload { padding: 0 5px; line-height: 1.4; color: #9aa4ae; }
 
+  /* ---- workorder picker ---- */
+  #woSent { color: #78828c; font-size: 11px; min-height: 1.4em; }
+  #woDialog {
+    background: #181b1f; color: #e6e6e6; border: 1px solid #3a424b; border-radius: 6px;
+    padding: 10px; min-width: 240px; font: inherit;
+  }
+  #woDialog::backdrop { background: rgba(0, 0, 0, .5); }
+  #woList { list-style: none; margin: 0 0 8px; padding: 0; max-height: 50vh; overflow-y: auto; }
+  #woList li { padding: 5px 6px; border-radius: 4px; cursor: pointer; user-select: none; }
+  #woList li:hover { background: #22262b; }
+  #woList li.none { color: #78828c; cursor: default; }
+  #woList li.none:hover { background: none; }
+
   #status { color: #9aa4ae; min-height: 1.4em; }
   #status.error { color: #ff8080; }
   #stats div, #cursor div, #tracks div.line { display: flex; justify-content: space-between; gap: 8px; }
@@ -96,6 +109,15 @@
   </section>
 
   <section>
+    <h2>Workorder</h2>
+    <div class="row" style="margin-bottom:0">
+      <button id="workorder" style="flex:1">Run workorder…</button>
+      <button id="abort">Abort</button>
+    </div>
+    <div id="woSent"></div>
+  </section>
+
+  <section>
     <select id="colorBy">
       <option value="auto">Colour by: automatic</option>
       <option value="track">Colour by: file</option>
@@ -119,6 +141,12 @@
     <div id="cursor"></div>
   </section>
 </div>
+
+<dialog id="woDialog">
+  <h2>Select workorder</h2>
+  <ul id="woList"></ul>
+  <button id="woCancel">Cancel</button>
+</dialog>
 
 <div id="main">
   <div id="map"></div>
@@ -1080,6 +1108,8 @@ function liveButton() {
           : !liveOn ? "Append live samples to " + target.name
           : liveUp() ? "Appending live samples to " + target.name
           : "Waiting for the mower to answer";
+
+  woButton();
 }
 
 /* Sitting on the newest sample means follow the new end, otherwise stay put. */
@@ -1150,7 +1180,85 @@ setInterval(() => {
   liveButton();
 }, 1000);
 
+/* ------------------------------------------------------------ workorder -- */
+/* Workorders are files workorder/<name>.wo on this server; the mower is told to
+   run one by name over the live socket - see logformat.txt, to-mower fieldtype 1.
+   Names outside a-z A-Z 0-9 _- are skipped: they cannot be sent as CSV. */
+
+const WORKORDER_DIR = "workorder/";
+const woDialog = document.getElementById("woDialog");
+
+const woReady = () => !!liveSocket && liveSocket.readyState === WebSocket.OPEN;
+
+function woButton() {
+  const hint = woReady() ? "" : " (press Live first - the command goes over the live socket)";
+
+  for (const id of ["workorder", "abort"]) {
+    const b = document.getElementById(id);
+    b.disabled = !woReady();
+    b.title = (id === "abort" ? "Abort the running workorder" : "Start a workorder on the mower") + hint;
+  }
+}
+
+/* The tunnel is frame-type binary, so send bytes rather than a text frame. */
+function woSend(action, name) {
+  if (!woReady()) return;
+  liveSocket.send(new TextEncoder().encode(`1,${action},${name}\n`));
+  document.getElementById("woSent").textContent = action === 1 ? "Sent: run " + name : "Sent: abort";
+}
+
+async function woNames() {
+  let text;
+  try {
+    const res = await fetch(WORKORDER_DIR, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    text = await res.text();
+  } catch (e) {
+    say("Workorder listing unavailable: " + e.message, true);
+    return [];
+  }
+
+  const doc = new DOMParser().parseFromString(text, "text/html");
+  const names = [...doc.querySelectorAll("a[href]")]
+    .map(a => a.getAttribute("href"))
+    .map(h => h ? decodeURIComponent(h.split("?")[0].split("/").pop()) : "")
+    .filter(n => /^[A-Za-z0-9_-]+\.wo$/.test(n))
+    .map(n => n.replace(/\.wo$/, ""));
+
+  return [...new Set(names)].sort();
+}
+
+function woItem(text, name) {
+  const li = document.createElement("li");
+
+  li.textContent = text;
+  if (!name) li.className = "none";
+  else li.addEventListener("click", () => { woSend(1, name); woDialog.close(); });
+  return li;
+}
+
+async function woOpen() {
+  const list = document.getElementById("woList");
+
+  list.replaceChildren(woItem("Listing …"));
+  woDialog.showModal();
+
+  const names = await woNames();
+  if (!woDialog.open) return;                  /* cancelled while listing */
+
+  list.replaceChildren(...(names.length ? names.map(n => woItem(n, n))
+                                        : [woItem("No .wo files in " + WORKORDER_DIR)]));
+}
+
+woButton();
+
 /* --------------------------------------------------------------- events -- */
+
+document.getElementById("workorder").addEventListener("click", woOpen);
+
+document.getElementById("abort").addEventListener("click", () => woSend(2, ""));
+
+document.getElementById("woCancel").addEventListener("click", () => woDialog.close());
 
 document.getElementById("live").addEventListener("click", () => {
   liveOn = !liveOn;

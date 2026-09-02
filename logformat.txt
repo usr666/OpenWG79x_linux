@@ -5,7 +5,66 @@ For example:
 
 A file without a #version line is version 1 (legacy), described at the end.
 
-=== Version 2 (current) ===
+=== Version 3 (current) ===
+CSV, one sample per row. Rows starting with # shall be ignored (except the first #version as described above)
+No quoting and no escaping: a field never contains a comma, a quote, CR or LF.
+Rows are separated by LF.
+A # row after #version naming the columns of each fieldtype the file uses is recommended but not mandatory.
+
+First field is fieldtype, a decimal number 1-255 that describes data format for this row
+
+Fieldtypes for data from mower to file/TCP connection
+
+Fieldtype 1 - Runtime data
+fieldtype              1
+timestamp_utc          UTC, ISO 8601, milliseconds
+latitude_nmea          verbatim NMEA ddmm.mmmmm; deg = floor(v/100), decimal = deg + (v - deg*100)/60
+latitude_hemisphere    N or S; S is negative
+longitude_nmea         verbatim NMEA dddmm.mmmmm; converted as latitude_nmea
+longitude_hemisphere   E or W; W is negative
+fix_quality            0 invalid, 1 GPS, 2 DGPS, 3 PPS, 4 RTK fixed, 5 RTK float, 6 dead reckoning, 7 manual, 8 simulation
+                       0 = the receiver reported no valid fix; empty = no GGA was seen at all
+satellites_used        satellites used in the fix
+hdop                   horizontal dilution of precision
+wifi_signal            wifi signal strength in dBm. -1 (best signal) to -100 (worst signal)
+mower_state            0 idle, 1 debug, 2 menu, 3 mow, 4 startcharge, 5 charging, 6 wait_for_schedule, 7 stopped, 8 stopped_2
+battery_soc_percent    battery charge, 0-100
+front_bump             1 = front bumper triggered
+lift                   1 = mower lifted
+wire_right_inside      1 = right wire sensor inside the boundary
+wire_left_inside       1 = left wire sensor inside the boundary
+near_wire              1 = close to the boundary wire, 0 = far from boundary wire
+
+Fieldtype 2 - Battery data
+fieldtype              2
+timestamp_utc          UTC, ISO 8601, milliseconds
+battery_voltage        Battery voltage in V as decimal number with . as decimal separator
+charge_current         Charge current in A as decimal number with . as decimal separator
+
+Fieldtype 3 - Debug
+fieldtype              3
+subtype                decimal number 1-255 describing rest of data
+
+subtype 1 - Freetext/undocumented format
+Treat rest of line as a text string
+
+subtype 2
+timestamp_utc          UTC, ISO 8601, milliseconds
+mainstate              decimal number 0-255
+mowstate               decimal number 0-255
+
+Fieldtype 4 - Workorder status
+fieldtype               4
+status                  1=workorder started, 2=workorder aborted, 3=workorder done
+workorder_name          ASCII Case sensitive workorder name. Allowed chars are a-z, A-Z, 0-9 _-
+
+Fieldtypes for data to mower from TCP connection
+Fieldtype 1 - Workorder
+fieldtype               1
+action                  1=start workorder, 2=abort workorder (workorder_name is ignored for abort action)
+workorder_name          ASCII Case sensitive workorder name. Allowed chars are a-z, A-Z, 0-9 _- 
+
+=== Version 2  ===
 CSV, one sample per row. Rows starting with # shall be ignored (except the first #version as described above)
 No quoting and no escaping: a field never contains a comma, a quote, CR or LF.
 Rows are separated by LF.

@@ -31,8 +31,6 @@ static char   uart_name[64];
 static frame_parser_t parser;
 static uint8_t rx[512];
 static size_t  rx_len, rx_pos;
-static size_t  tx_pos;			/* 0 START, 1 msg_id, 2 len, 3+ payload and crc */
-static size_t  tx_left;			/* payload + crc bytes still to escape */
 
 /* CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final xor */
 static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
@@ -41,8 +39,9 @@ static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
 
 	for (size_t i = 0; i < len; i++) {
 		crc ^= (uint16_t)data[i] << 8;
-		for (int bit = 0; bit < 8; bit++)
+		for (int bit = 0; bit < 8; bit++) {
 			crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+		}
 	}
 	return crc;
 }
@@ -52,15 +51,18 @@ static int handle_frame(const uint8_t *buf, size_t len, uint8_t *msgid, void *da
 	uint8_t  payload = buf[1];
 	uint16_t crc_rx, crc_calc;
 
-	if (len != (size_t)payload + 4)		/* MSG_ID + LEN + payload + CRC */
+	if (len != (size_t)payload + 4) {	/* MSG_ID + LEN + payload + CRC */
 		return 0;
-	if (payload > size)
+	}
+	if (payload > size) {
 		return 0;
+	}
 
 	crc_rx   = (uint16_t)(buf[len - 2] << 8) | buf[len - 1];
 	crc_calc = crc16_ccitt(buf, len - 2);
-	if (crc_rx != crc_calc)
+	if (crc_rx != crc_calc) {
 		return 0;
+	}
 
 	*msgid = buf[0];
 	*msglen = payload;
@@ -77,8 +79,9 @@ static int parse_byte(uint8_t b, uint8_t *msgid, void *data, size_t size, size_t
 		parser.escaped = 0;
 		return 0;
 	}
-	if (!parser.in_frame)
+	if (!parser.in_frame) {
 		return 0;
+	}
 
 	if (b == FRAME_ESC) {
 		parser.escaped = 1;
@@ -109,11 +112,11 @@ int mowercom_open(const char *device)
 	int fd = open(device, O_RDWR | O_NOCTTY | O_NONBLOCK);
 
 	if (fd < 0) {
-		fprintf(stderr, "open %s: %s\n", device, strerror(errno));
+		printf("open %s: %s\n", device, strerror(errno));
 		return -1;
 	}
 	if (tcgetattr(fd, &tio) < 0) {
-		fprintf(stderr, "tcgetattr %s: %s\n", device, strerror(errno));
+		printf("tcgetattr %s: %s\n", device, strerror(errno));
 		close(fd);
 		return -1;
 	}
@@ -127,7 +130,7 @@ int mowercom_open(const char *device)
 	tio.c_cc[VTIME] = 0;
 
 	if (tcsetattr(fd, TCSANOW, &tio) < 0) {
-		fprintf(stderr, "tcsetattr %s: %s\n", device, strerror(errno));
+		printf("tcsetattr %s: %s\n", device, strerror(errno));
 		close(fd);
 		return -1;
 	}
@@ -144,58 +147,60 @@ int mowercom_read(uint8_t *msgid, void *data, size_t size, size_t *len)
 
 	for (;;) {
 		while (rx_pos < rx_len) {
-			if (parse_byte(rx[rx_pos++], msgid, data, size, len))
+			if (parse_byte(rx[rx_pos++], msgid, data, size, len)) {
 				return 1;
+			}
 		}
 		rx_pos = rx_len = 0;
 
 		n = read(uart_fd, rx, sizeof(rx));
-		if (n == 0)
+		if (n == 0) {
 			return 0;
+		}
 		if (n < 0) {
-			if (errno == EAGAIN || errno == EWOULDBLOCK)
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				return 0;
-			fprintf(stderr, "read %s: %s\n", uart_name, strerror(errno));
+			}
+			printf("read %s: %s\n", uart_name, strerror(errno));
 			return -1;
 		}
 		rx_len = (size_t)n;
 	}
 }
 
-int mowercom_write(const uint8_t *data, size_t len)
+int mowercom_send(uint8_t msgid, const void *data, size_t len)
 {
+	uint8_t frame[MAX_FRAME_SIZE];
 	uint8_t wire[2 * MAX_FRAME_SIZE];
-	size_t n = 0, i;
+	size_t f = 0, n = 0, i;
+	uint16_t crc;
 
-	if (uart_fd < 0 || len > MAX_FRAME_SIZE)
+	if (uart_fd < 0 || len > MAX_MSG_SIZE) {
 		return -1;
+	}
 
-	for (i = 0; i < len; i++) {
-		uint8_t b = data[i];
+	frame[f++] = msgid;
+	frame[f++] = (uint8_t)len;
+	if (len) {
+		memcpy(frame + f, data, len);
+	}
+	f += len;
+	crc = crc16_ccitt(frame, f);
+	frame[f++] = (uint8_t)(crc >> 8);
+	frame[f++] = (uint8_t)crc;
 
-		if (tx_pos == 0) {		/* START goes out as is */
-			wire[n++] = b;
-			tx_pos++;
-			continue;
-		}
-
-		if (b == FRAME_START || b == FRAME_ESC) {
+	wire[n++] = FRAME_START;
+	for (i = 0; i < f; i++) {
+		if (frame[i] == FRAME_START || frame[i] == FRAME_ESC) {
 			wire[n++] = FRAME_ESC;
-			wire[n++] = b ^ ESC_XOR;
+			wire[n++] = frame[i] ^ ESC_XOR;
 		} else {
-			wire[n++] = b;
+			wire[n++] = frame[i];
 		}
-
-		if (tx_pos == 2)		/* LEN, payload + crc follow */
-			tx_left = (size_t)b + 2;
-		if (tx_pos < 3)
-			tx_pos++;
-		else if (--tx_left == 0)
-			tx_pos = 0;
 	}
 
 	if (write(uart_fd, wire, n) != (ssize_t)n) {
-		fprintf(stderr, "write %s: %s\n", uart_name, strerror(errno));
+		printf("write %s: %s\n", uart_name, strerror(errno));
 		return -1;
 	}
 	return 0;
