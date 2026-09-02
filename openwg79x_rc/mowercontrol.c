@@ -94,20 +94,41 @@ static void start_workorder(const char *name)
 
 static void tcp_row(const char *row)
 {
+	const char *field;
 	char name[WORKORDER_NAME_MAX];
 	int fieldtype, action;
 
 	printf("tcp row: %s\n", row);
-	if (sscanf(row, "%d,%d,%31[^,\r]", &fieldtype, &action, name) != 3) {
-		printf("tcp row ignored, needs fieldtype,action,name\n");
-		return;
-	}
-	if (fieldtype != 1 || action != 1 || !valid_name(name)) {
-		printf("tcp row ignored, fieldtype %d action %d name %s\n", fieldtype, action, name);
+
+	if (sscanf(row, "%d", &fieldtype) != 1 || fieldtype != 1) {
+		printf("tcp row ignored, not fieldtype 1\n");
 		return;
 	}
 
-	start_workorder(name);
+	field = strchr(row, ',');
+	if (!field || sscanf(field + 1, "%d", &action) != 1) {
+		printf("tcp row ignored, no action\n");
+		return;
+	}
+
+	switch(action) {
+		case 1:
+			field = strchr(field + 1, ',');
+			if (!field || sscanf(field + 1, "%31[^,\r]", name) != 1 || !valid_name(name)) {
+				printf("tcp row ignored, bad workorder name\n");
+				return;
+			}
+			start_workorder(name);
+			break;
+		case 2:
+			printf("tcp abort\n");
+			mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4); // stop mower
+			mctrstate = mctr_idle;
+			break;
+		default:
+			printf("tcp row ignored, action %d\n", action);
+			break;
+	}
 }
 
 void mowercontrol_input_tcp(const uint8_t *data, size_t len)
