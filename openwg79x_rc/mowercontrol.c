@@ -194,6 +194,7 @@ static void wo_cmd_turn(void)
 	p[4] = force;
 	printf("cmd turn: %d deg %s speed %d disc %d force %d\n", angle, dir ? "right" : "left", speed, disc, force);
 	direction_known = false;	/* the mower turns without us tracking the heading */
+	turn_started = false;		/* so a wait for this turn can't resolve on a stale flag */
 	mowercom_send(MSG_REMOTE_CONTROL_TURN, p, sizeof(p));
 }
 
@@ -274,7 +275,11 @@ static bool is_wait_condition_done(void)
 
 	switch(wo_wait_event) {
 		case 1:
-			return(status.state != STATE_RC_TURNING);
+			if (status.state == STATE_RC_TURNING) {
+				turn_started = true;
+				return false;
+			}
+			return turn_started;
 		case 2:
 			quality = gga_quality();
 			return quality == FIX_RTK_FIXED || quality == FIX_RTK_FLOAT;

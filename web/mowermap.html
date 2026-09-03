@@ -491,10 +491,7 @@ function drawTrack(track, rows, mode) {
                   .bindPopup(popupHtml(r, track)).addTo(eventLayer);
   }
 
-  const first = rows[0], last = rows[rows.length - 1];
-  L.circleMarker([first.lat, first.lon],
-    { radius: 7, color: "#fff", weight: 2, fillColor: "#43aa8b", fillOpacity: 1 })
-    .bindPopup("<b>Start</b><br>" + popupHtml(first, track)).addTo(markerLayer);
+  const last = rows[rows.length - 1];
   L.circleMarker([last.lat, last.lon],
     { radius: 7, color: "#fff", weight: 2, fillColor: "#f94144", fillOpacity: 1 })
     .bindPopup("<b>End</b><br>" + popupHtml(last, track)).addTo(markerLayer);
@@ -1129,9 +1126,9 @@ function liveAppend(rows) {
   target.rows.push(...fresh);
 
   /* A window zoomed onto the end of the log would otherwise keep showing the
-     same samples while new ones pile up past its right edge. Slide it along,
-     keeping the width the zoom asked for. */
-  if (wasLast && atEnd && newest > viewRange.t1) viewRange = { t0: viewRange.t0 + (newest - viewRange.t1), t1: newest };
+     same samples while new ones pile up past its right edge. Stretch its right
+     edge to the newest sample, leaving the start where the zoom put it. */
+  if (wasLast && atEnd && newest > viewRange.t1) viewRange.t1 = newest;
 
   selectEnd = wasLast;
   return true;
