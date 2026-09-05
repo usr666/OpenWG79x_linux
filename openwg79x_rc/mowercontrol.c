@@ -24,6 +24,7 @@
 #define AT_POINT_MM 500
 #define DIRECTION_SPEED 50
 #define DIRECTION_MEASURE_MS 3000
+#define MIN_MEASURE_MM 1000		/* a shorter baseline makes the bearing noise */
 #define RUN_SPEED 50
 #define TARGET_BEHIND_DEG 90.0
 #define OFF_COURSE_DEG 10.0
@@ -152,6 +153,7 @@ void mowercontrol_input_mowercom(uint8_t msgid, const uint8_t *msgbuf)
 {
 	if (msgid == MSG_MOWER_STATUS) {
 		memcpy(&status, msgbuf, sizeof(status));
+		printf("status: state %u wheels %d/%d bump %u lift %u wire %u%u%u soc %u\n", status.state, status.left_wheel_speed, status.right_wheel_speed, (status.sensor_status >> 0) & 1, (status.sensor_status >> 1) & 1, (status.wire_sensor_status >> 0) & 1, (status.wire_sensor_status >> 1) & 1, (status.wire_sensor_status >> 2) & 1, status.battery_soc);
 	}
 }
 
@@ -192,7 +194,7 @@ static void wo_cmd_turn(void)
 	p[2] = dir;
 	p[3] = disc;
 	p[4] = force;
-	printf("cmd turn: %d deg %s speed %d disc %d force %d\n", angle, dir ? "right" : "left", speed, disc, force);
+	printf("cmd turn: turn ordered %d deg %s at speed %d, disc %d force %d\n", angle, dir ? "right" : "left", speed, disc, force);
 	direction_known = false;	/* the mower turns without us tracking the heading */
 	turn_started = false;		/* so a wait for this turn can't resolve on a stale flag */
 	mowercom_send(MSG_REMOTE_CONTROL_TURN, p, sizeof(p));
@@ -351,7 +353,7 @@ void mowercontrol_execute()
 				mctrstate = mctr_rtp_determine_direction;
 			} else {	/* turn on the spot until we point at the target */
 				turn = fmod(bearing_between_points(&pos, &wo_target) - direction + 540.0, 360.0) - 180.0;
-				printf("rtp: %d mm to go, heading %.0f, turning %.0f deg %s\n", distance_between_points(&pos, &wo_target), direction, fabs(turn), turn < 0 ? "left" : "right");
+				printf("rtp: %d mm to go, heading %.0f, turn ordered %d deg %s at speed 0\n", distance_between_points(&pos, &wo_target), direction, (int)fabs(turn), turn < 0 ? "left" : "right");
 				mowercom_send(MSG_REMOTE_CONTROL_TURN, (uint8_t[]){ 0, (uint8_t)fabs(turn), turn < 0 ? 0 : 1, 0, 0 }, 5);
 				turn_started = false;
 				state_deadline = now_ms() + TURN_START_MS;
@@ -365,7 +367,7 @@ void mowercontrol_execute()
 				printf("rtp: at point, %d mm to go\n", distance_between_points(&pos, &wo_target));
 				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4); // stop mower
 				mctrstate = mctr_read_wo_line;
-			} else if (now_ms() >= state_deadline) {
+			} else if (now_ms() >= state_deadline && distance_between_points(&state_start_point, &pos) >= MIN_MEASURE_MM) {
 				direction = bearing_between_points(&state_start_point, &pos);
 				direction_known = true;
 				printf("rtp: direction measured over %d mm, heading %.0f\n", distance_between_points(&state_start_point, &pos), direction);
@@ -401,15 +403,16 @@ void mowercontrol_execute()
 				printf("rtp: at point, %d mm to go\n", distance_between_points(&pos, &wo_target));
 				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4); // stop mower
 				mctrstate = mctr_read_wo_line;
-			} else if (now_ms() >= state_deadline) {
+			} else if (now_ms() >= state_deadline && distance_between_points(&state_start_point, &pos) >= MIN_MEASURE_MM) {
 				direction = bearing_between_points(&state_start_point, &pos);
 				turn = fmod(bearing_between_points(&pos, &wo_target) - direction + 540.0, 360.0) - 180.0;
+				printf("rtp: direction measured over %d mm, heading %.0f, %d mm to go, off course %.0f deg\n", distance_between_points(&state_start_point, &pos), direction, distance_between_points(&pos, &wo_target), turn);
 				if (fabs(turn) > TARGET_BEHIND_DEG) {
-					printf("rtp: target behind, %d mm to go, heading %.0f, off course %.0f deg\n", distance_between_points(&pos, &wo_target), direction, turn);
+					printf("rtp: target behind, giving up on the point\n");
 					mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4); // stop mower
 					mctrstate = mctr_read_wo_line;
 				} else if (fabs(turn) > OFF_COURSE_DEG) {
-					printf("rtp: %d mm to go, heading %.0f, off course %.0f deg, correcting\n", distance_between_points(&pos, &wo_target), direction, turn);
+					printf("rtp: turn ordered %d deg %s at speed %d\n", (int)fabs(turn), turn < 0 ? "left" : "right", RUN_SPEED);
 					mowercom_send(MSG_REMOTE_CONTROL_TURN, (uint8_t[]){ RUN_SPEED, (uint8_t)fabs(turn), turn < 0 ? 0 : 1, 0, 0 }, 5);
 					turn_started = false;
 					state_deadline = now_ms() + TURN_START_MS;

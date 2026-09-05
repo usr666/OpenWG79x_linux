@@ -534,9 +534,109 @@ function drawPoints() {
 
   if (coords.length > 1) L.polyline(coords, { color: "#4cc9f0", weight: 2, opacity: .8, dashArray: "4 4" }).addTo(pathLayer);
   if (point.lat) marker(L.latLng(degrees(point.lat, point.ns), degrees(point.lon, point.ew)), "", "pending", false).addTo(pathLayer);
+  mow.pts.forEach((ll, i) => marker(ll, "p" + (i + 1), "pending", false).addTo(pathLayer));
 }
 
-map.on("click", e => pointFields(e.latlng));
+map.on("click", e => mow.picking ? mowClick(e.latlng) : pointFields(e.latlng));
+
+/* ----------------------------------------------------------- mow area -- */
+/* Four corners clicked in order round the area. The mower drives p1-p2, steps
+   sideways at the p2 end, drives back to a point one spacing further along
+   p1-p4, steps sideways at the p1 end, and so on until a rail runs out. Every
+   sideways step is turn 90, run, turn 90 the same way - the rows a hand
+   written workorder would use, so nothing new is asked of the mower. */
+
+const MOW_STEP_M = 0.20;
+const MOW_RUN_SPEED = 30;
+const MOW_TURN_SPEED = 0;      /* 0 turns on the spot, which is the exact 90 */
+const MOW_TURN_TIMEOUT = 10;
+
+const mow = { picking: false, pts: [] };
+
+const M_PER_DEG = 111320;
+
+const metres = (a, b) => Math.hypot((b.lat - a.lat) * M_PER_DEG,
+                                    (b.lng - a.lng) * M_PER_DEG * Math.cos(a.lat * Math.PI / 180));
+
+/* Degrees from north, clockwise, same convention as the mower. */
+const bearing = (from, to) => Math.atan2((to.lng - from.lng) * Math.cos(from.lat * Math.PI / 180),
+                                         to.lat - from.lat) * 180 / Math.PI;
+
+/* "1" right, "0" left, whichever is the short way from heading round to want. */
+const turnDir = (heading, want) => (((want - heading + 540) % 360) - 180) > 0 ? "1" : "0";
+
+function along(from, to, d) {
+  const len = metres(from, to);
+  const f = len ? d / len : 0;
+
+  return L.latLng(from.lat + (to.lat - from.lat) * f, from.lng + (to.lng - from.lng) * f);
+}
+
+function mowAreaRows([p1, p2, p3, p4]) {
+  const out = [];
+  const dirP2 = turnDir(bearing(p1, p2), bearing(p2, p3));   /* at the p2 end, towards p3 */
+  const dirP1 = turnDir(bearing(p2, p1), bearing(p1, p4));   /* at the p1 end, towards p4 */
+  const rails = Math.floor(Math.min(metres(p1, p4), metres(p2, p3)) / MOW_STEP_M);
+
+  const addPoint = ll => out.push({ cmd: 4, values: [nmea(ll.lat, 2), ll.lat < 0 ? "S" : "N", nmea(ll.lng, 3), ll.lng < 0 ? "W" : "E"] });
+  const addTurn = dir => {
+    out.push({ cmd: 2, values: [String(MOW_TURN_SPEED), "90", dir, "0", "0"] });
+    out.push({ cmd: 3, values: ["1", String(MOW_TURN_TIMEOUT)] });
+  };
+  const addStep = dir => {
+    addTurn(dir);
+    out.push({ cmd: 1, values: [String(MOW_RUN_SPEED), String(MOW_RUN_SPEED), "0", "0"] });
+    out.push({ cmd: 3, values: ["0", "1"] });
+    addTurn(dir);
+  };
+
+  addPoint(p1);
+  addPoint(p2);
+  for (let k = 1; k <= rails; k++) {
+    addStep(dirP2);
+    addPoint(along(p1, p4, k * MOW_STEP_M));
+    addStep(dirP1);
+    addPoint(along(p2, p3, k * MOW_STEP_M));
+  }
+  return out;
+}
+
+function mowClick(latlng) {
+  mow.pts.push(latlng);
+  if (mow.pts.length < 4) {
+    say(`Mow area: click p${mow.pts.length + 1}`);
+    drawPoints();
+    return;
+  }
+
+  const made = mowAreaRows(mow.pts);
+  const at = selected < 0 ? rows.length : selected + 1;
+
+  mow.picking = false;
+  mow.pts = [];
+  rows.splice(at, 0, ...made);
+  selected = at + made.length - 1;
+  say(`Mow area: ${made.length} rows added`);
+  change();
+}
+
+function mowStart() {
+  mow.picking = !mow.picking;
+  mow.pts = [];
+  say(mow.picking ? "Mow area: click p1" : "");
+  drawPoints();
+}
+
+function buildMowArea() {
+  const block = document.createElement("div");
+
+  block.className = "cmd";
+  block.innerHTML = `<h2>Mow area</h2>`
+    + `<div class="field"><label>Row spacing</label><span>${MOW_STEP_M * 100} cm</span></div>`
+    + `<div class="row"><button id="mowPick">Pick 4 corners</button></div>`;
+  document.getElementById("commands").appendChild(block);
+  document.getElementById("mowPick").addEventListener("click", mowStart);
+}
 
 /* --------------------------------------------------------------- file -- */
 /* Files live in workorder/ on this server: listed from its directory index,
@@ -689,6 +789,7 @@ addEventListener("beforeunload", e => { if (dirty) e.preventDefault(); });
 /* ----------------------------------------------------------- start-up -- */
 
 buildCommands();
+buildMowArea();
 setFile("", "");
 loadLayers();
 </script>
