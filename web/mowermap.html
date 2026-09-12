@@ -12,33 +12,25 @@
   html, body { height: 100%; margin: 0; }
   body { display: flex; font: 13px/1.4 system-ui, sans-serif; background: #14171a; color: #e6e6e6; }
 
-  #sidebar {
-    width: 300px; flex: none; display: flex; flex-direction: column;
-    background: #181b1f; border-right: 1px solid #2b3238; overflow: hidden;
-  }
   #main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
-  #sidebar.collapsed { display: none; }
-
-  /* A handle on the map edge, clear of the zoom buttons and the scale bar. */
-  #collapse {
-    position: absolute; left: 0; top: 50%; transform: translateY(-50%); z-index: 500;
-    width: 24px; height: 96px; padding: 0; font-size: 20px; line-height: 1;
-    border-left: none; border-radius: 0 6px 6px 0;
-  }
   #map { flex: 1; min-height: 0; background: #14171a; }
 
   /* ---- graph strip along the bottom quarter of the window ---- */
   #chart {
-    height: 25%; flex: none; display: flex; flex-direction: column;
+    height: 25%; flex: none; display: flex; flex-direction: column; position: relative;
     padding: 6px 8px 4px; background: #181b1f; border-top: 1px solid #2b3238;
   }
-  #chartHead { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-  #chartHead select { width: auto; padding: 2px 4px; }
-  #chartName { color: #9aa4ae; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #chartZoom { color: #78828c; font-size: 11px; white-space: nowrap; }
-  #chartValue { margin-left: auto; color: #78828c; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  #chartValue b { color: #e6e6e6; }
-  #chartCanvas { flex: 1; min-height: 0; width: 100%; display: block; cursor: crosshair; }
+
+  /* Handles on the graph edges, extending the window into the past and future. */
+  #earlier, #later {
+    position: absolute; top: 50%; transform: translateY(-50%); z-index: 5;
+    width: 20px; height: 64px; padding: 0; font-size: 16px; line-height: 1;
+  }
+  #earlier { left: 0; border-left: none; border-radius: 0 5px 5px 0; }
+  #later { right: 0; border-right: none; border-radius: 5px 0 0 5px; }
+
+  /* touch-action: a finger drag on the graph is a zoom selection, not a page gesture. */
+  #chartCanvas { flex: 1; min-height: 0; width: 100%; display: block; cursor: crosshair; touch-action: none; }
 
   section { padding: 10px; border-bottom: 1px solid #2b3238; }
   section.grow { flex: 1; min-height: 0; overflow-y: auto; border-bottom: none; }
@@ -60,19 +52,14 @@
   button.wait { border-color: #f9c74f; color: #f9c74f; }
   input[type=range] { width: 100%; }
 
-  /* ---- file list ---- */
-  #files { list-style: none; margin: 0; padding: 0; }
-  #files li {
-    display: flex; align-items: center; gap: 7px; padding: 5px 6px; border-radius: 4px;
-    cursor: pointer; user-select: none;
+  #loaded { color: #78828c; font-size: 11px; }
+
+  #busy {
+    width: 12px; height: 12px; flex: none; border-radius: 50%;
+    border: 2px solid #3a424b; border-top-color: #4cc9f0;
+    animation: spin .8s linear infinite;
   }
-  #files li:hover { background: #22262b; }
-  #files li.on { background: #23303a; }
-  #files li.active { outline: 1px solid #4cc9f0; }
-  #files .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; background: #3a424b; }
-  #files .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #files .meta { color: #78828c; font-size: 11px; }
-  #files .reload { padding: 0 5px; line-height: 1.4; color: #9aa4ae; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   /* ---- workorder picker ---- */
   #woSent { color: #78828c; font-size: 11px; min-height: 1.4em; }
@@ -87,68 +74,56 @@
   #woList li.none { color: #78828c; cursor: default; }
   #woList li.none:hover { background: none; }
 
-  #status { color: #9aa4ae; min-height: 1.4em; }
-  #status.error { color: #ff8080; }
-  #stats div, #cursor div, #tracks div.line { display: flex; justify-content: space-between; gap: 8px; }
-  #stats span, #cursor span { color: #9aa4ae; }
-  #legend .key { display: inline-flex; align-items: center; gap: 5px; margin: 0 10px 4px 0; }
-  #legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
-  #cursor { margin-top: 6px; font-variant-numeric: tabular-nums; }
-  #stats { font-variant-numeric: tabular-nums; }
+  #status { color: #ff8080; font-size: 11px; }
+  /* Top right: the sample the cursor sits on, then the button column. */
+  .menu { display: flex; align-items: flex-start; gap: 6px; }
+  .menu .stack { display: flex; flex-direction: column; }
+  #sample {
+    min-width: 160px; padding: 6px 8px; font-size: 12px; font-variant-numeric: tabular-nums;
+    background: rgba(34, 38, 43, .9); border: 1px solid #2b3238; border-radius: 4px;
+  }
+  #sample div { display: flex; justify-content: space-between; gap: 10px; }
+  #sample span { color: #9aa4ae; }
+
+  /* The map toolbar, top right: the menu button and the mower commands. */
+  .menu .tools { display: flex; gap: 2px; }
+  .menu .tools button, .menu #menuBtn {
+    width: 30px; height: 30px; padding: 0; font-size: 15px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .menu #menuBtn { align-self: flex-end; }   /* the box grows leftwards, the button stays put */
+  .menu #woSent, .menu #status { margin-top: 4px; max-width: 170px; text-align: right; }
+
+  /* The menu button and whatever it has open share one box. */
+  .menu .box {
+    display: flex; flex-direction: column; padding: 2px;
+    background: #22262b; border: 1px solid #2b3238; border-radius: 4px;
+  }
+  .menu .box button { border: none; background: none; text-align: left; }
+  .menu .box button:hover { background: #2c323a; }
+  .menu .panel { display: flex; flex-direction: column; }
+
+  /* The stock layer control is the menu's Layers panel: no box of its own. */
+  .menu .leaflet-control-layers {
+    margin: 0; padding: 4px 6px; background: none; border: none;
+    box-shadow: none; color: #e6e6e6;
+  }
+
+  /* The line colour key, floating over the bottom left corner of the map. */
+  #legend {
+    padding: 6px 8px; min-width: 120px; max-height: 40vh; overflow-y: auto;
+    background: rgba(34, 38, 43, .9); border: 1px solid #2b3238; border-radius: 4px;
+    color: #e6e6e6; font-size: 11px;
+  }
+  #legend .key { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
+  #legend .key:last-child { margin-bottom: 0; }
+  #legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
   .hidden { display: none !important; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #22262b; color: #e6e6e6; }
   .leaflet-popup-content { font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
-
-<div id="sidebar">
-  <section class="row" style="align-items:center;margin-bottom:0">
-    <h1 style="margin:0;flex:1">Worklogs</h1>
-    <button id="live" title="Append live samples to the shown file">Live</button>
-    <button id="refresh" title="Reload the list of worklogs">Refresh</button>
-  </section>
-
-  <section class="grow">
-    <ul id="files"></ul>
-    <button id="load" style="margin-top:8px">Load file…</button>
-    <input type="file" id="file" accept=".csv,text/csv" multiple class="hidden">
-    <div id="status" class="hidden"></div>
-  </section>
-
-  <section>
-    <h2>Workorder</h2>
-    <div class="row" style="margin-bottom:0">
-      <button id="workorder" style="flex:1">Run workorder…</button>
-      <button id="abort">Abort</button>
-    </div>
-    <div id="woSent"></div>
-  </section>
-
-  <section>
-    <select id="colorBy">
-      <option value="auto">Colour by: automatic</option>
-      <option value="track">Colour by: file</option>
-      <option value="state">Colour by: mower state</option>
-      <option value="battery">Colour by: battery SoC</option>
-      <option value="near_wire">Colour by: near wire</option>
-      <option value="wire">Colour by: wire sensors</option>
-      <option value="hdop">Colour by: HDOP</option>
-      <option value="sats">Colour by: satellites used</option>
-      <option value="wifi">Colour by: wifi signal</option>
-      <option value="fix">Colour by: fix quality</option>
-      <option value="time">Colour by: time</option>
-    </select>
-    <div id="legend" style="margin-top:8px"></div>
-  </section>
-
-  <section id="statsBox" class="hidden">
-    <h2 id="statsTitle">Selection</h2>
-    <div id="stats"></div>
-    <input type="range" id="slider" min="0" max="0" value="0" style="margin-top:8px">
-    <div id="cursor"></div>
-  </section>
-</div>
 
 <dialog id="woDialog">
   <h2>Select workorder</h2>
@@ -157,23 +132,10 @@
 </dialog>
 
 <div id="main">
-  <button id="collapse" title="Hide the sidebar">&lsaquo;</button>
   <div id="map"></div>
   <div id="chart">
-    <div id="chartHead">
-      <select id="channel">
-        <option value="soc">Battery SoC</option>
-        <option value="sats">Satellites used</option>
-        <option value="hdop">HDOP</option>
-        <option value="wifi">Wifi signal</option>
-        <option value="volt">Battery voltage</option>
-        <option value="current">Charge current</option>
-        <option value="state">Mower state</option>
-      </select>
-      <span id="chartName"></span>
-      <span id="chartZoom"></span>
-      <span id="chartValue"></span>
-    </div>
+    <button id="earlier" title="Extend the window further back in time">&laquo;</button>
+    <button id="later" title="Extend the window further forward in time">&raquo;</button>
     <canvas id="chartCanvas"></canvas>
   </div>
 </div>
@@ -186,7 +148,6 @@
    Load file… are left out: the browser will not re-read a local file unasked. */
 
 const STORE_KEY = "mowermap.v1";
-const isFile = k => k.startsWith("file:");
 
 const STATE = (() => {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
@@ -196,11 +157,9 @@ function saveState() {
   const state = {
     known: OVERLAYS.map(o => o.name),
     layers: OVERLAYS.filter(o => map.hasLayer(o.layer)).map(o => o.name),
-    logs: TRACKS.filter(t => t.on && !isFile(t.key)).map(t => t.key),
-    active: activeKey && !isFile(activeKey) ? activeKey : null,
-    colorBy: document.getElementById("colorBy").value,
-    channel: document.getElementById("channel").value,
-    collapsed: document.getElementById("sidebar").classList.contains("collapsed")
+    span: viewRange.t1 - viewRange.t0,
+    colorBy: colorMode,
+    channel: graphChannel
   };
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch { /* blocked or full */ }
 }
@@ -227,10 +186,64 @@ const sat = L.tileLayer(
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
   maxZoom: MAX_ZOOM, maxNativeZoom: 18, attribution: "Imagery &copy; Esri"
 });
+/* ---------------------------------------------------------------- menu -- */
+/* One button on the map lists what there is to open; picking an item closes the
+   list and opens that item's panel under the button. */
+
+const COLOR_MODES = [["state", "Mower state"], ["battery", "Battery SoC"], ["near_wire", "Near wire"],
+                     ["wire", "Wire sensors"], ["hdop", "HDOP"], ["sats", "Satellites used"],
+                     ["wifi", "Wifi signal"], ["fix", "Fix quality"], ["time", "Time"]];
+
+let colorMode = COLOR_MODES.some(m => m[0] === STATE.colorBy) ? STATE.colorBy : "state";
+
+const menuControl = L.control({ position: "topright" });
+
+menuControl.onAdd = () => {
+  const div = L.DomUtil.create("div", "menu");
+
+  div.innerHTML = '<div class="tools">' +
+                    '<button id="abort" title="Abort the running workorder">&#9632;</button>' +
+                    '<button id="workorder" title="Start a workorder on the mower">&#9654;</button>' +
+                    '<button id="live" title="Append live samples to the shown file">&#9679;</button>' +
+                  '</div>' +
+                  '<div id="sample" class="hidden"></div>' +
+                  '<div class="stack">' +
+                    '<div class="box">' +
+                      '<button id="menuBtn" title="Menu">&#9776;</button>' +
+                      '<div id="menuList" class="panel hidden"></div>' +
+                      '<div id="colorPanel" class="panel hidden"></div>' +
+                      '<div id="channelPanel" class="panel hidden"></div>' +
+                    '</div>' +
+                    '<div id="woSent"></div>' +
+                    '<div id="busy" class="hidden" title="Loading worklogs"></div>' +
+                    '<div id="status" class="hidden"></div>' +
+                  '</div>';
+  L.DomEvent.disableClickPropagation(div);
+  return div;
+};
+menuControl.addTo(map);
+
 /* All layers are overlays, not base layers, so every one is a checkbox and the
-   imagery can be switched off entirely. */
-const layerControl = L.control.layers(null, null, { position: "topright" }).addTo(map);
+   imagery can be switched off entirely. The control is the menu's Layers panel:
+   always expanded, and hidden until the menu opens it. */
+const layerControl = L.control.layers(null, null, { position: "topright", collapsed: false }).addTo(map);
+
+layerControl.getContainer().classList.add("hidden");
+document.querySelector(".menu .box").appendChild(layerControl.getContainer());   /* one box for every panel */
+
 L.control.scale({ imperial: false }).addTo(map);
+
+/* The key for the line colour, floating over the map rather than in the column. */
+const legendControl = L.control({ position: "bottomleft" });
+
+legendControl.onAdd = () => {
+  const div = L.DomUtil.create("div");
+
+  div.id = "legend";
+  div.classList.add("hidden");
+  return div;
+};
+legendControl.addTo(map);
 
 const OVERLAYS = [];   /* {name, layer} for every checkbox in the control */
 
@@ -308,8 +321,6 @@ function parseCsv(text) {
 
 /* --------------------------------------------------------------- colour -- */
 
-const TRACK_COLORS = ["#4cc9f0", "#f9c74f", "#90be6d", "#f8961e", "#b5179e",
-                      "#43aa8b", "#f94144", "#4895ef"];
 /* The firmware also reports states of its own past this list - those are left
    as the bare number rather than guessed at. */
 const STATE_NAMES = { 0: "idle", 1: "debug", 2: "menu", 3: "mow", 4: "startcharge", 5: "charging",
@@ -338,19 +349,11 @@ function ramp(stops, f) {
 const HEAT = ["#f94144", "#f8961e", "#f9c74f", "#90be6d", "#43aa8b"];   /* bad -> good  */
 const TIME = ["#4cc9f0", "#4895ef", "#b5179e", "#f94144", "#f9c74f"];   /* early -> late */
 
-/* "auto" = per file when several are shown, mower state when only one is. */
-function effectiveMode() {
-  const mode = document.getElementById("colorBy").value;
-  if (mode !== "auto") return mode;
-  return selected().length > 1 ? "track" : "state";
-}
-
-function colorFn(mode, track, rows) {
+function colorFn(mode, rows) {
   const t0 = rows.length ? rows[0].t : 0;
   const t1 = rows.length ? rows[rows.length - 1].t : 0;
 
   switch (mode) {
-    case "track":     return () => track.color;
     case "state":     return r => r.state == null ? GREY : (STATE_COLORS[r.state] || GREY);
     case "battery":   return r => r.soc == null ? GREY : ramp(HEAT, r.soc / 100);
     case "near_wire": return r => r.near_wire == null ? GREY : (r.near_wire ? "#f94144" : "#43aa8b");
@@ -365,7 +368,7 @@ function colorFn(mode, track, rows) {
     case "wifi":      return r => r.wifi == null ? GREY : ramp(HEAT, (r.wifi + 80) / 30);
     case "fix":       return r => FIX_COLORS[r.fix_quality] || GREY;
     case "time":      return r => (t1 > t0 && r.t != null) ? ramp(TIME, (r.t - t0) / (t1 - t0)) : GREY;
-    default:          return () => track.color;
+    default:          return () => GREY;
   }
 }
 
@@ -379,7 +382,6 @@ function legendFor(mode, tracks) {
     `<span>${lo}</span><span>${hi}</span></div>`;
 
   switch (mode) {
-    case "track":     return keys(tracks.map(t => [t.color, t.name]));
     case "state": {
       const seen = [...new Set(rows.map(r => r.state).filter(s => s != null))].sort((a, b) => a - b);
       return keys(seen.map(s => [STATE_COLORS[s] || GREY, stateName(s)]));
@@ -403,30 +405,58 @@ function legendFor(mode, tracks) {
 /* --------------------------------------------------------------- tracks -- */
 /* One entry per known log file. rows === null until it has been loaded. */
 
-const TRACKS = [];             /* {key, name, url, file, rows, color, on} */
+const TRACKS = [];             /* {key, name, url, file, rows, on} */
 let activeKey = null;          /* file the stats box and scrubber follow  */
 
-/* Time window picked by dragging on the graph; null means the whole log.
+/* The shown time window, which also decides which log files get loaded.
    Everything downstream — map, stats, scrubber, graph — works off view(). */
-let viewRange = null;          /* {t0, t1} in epoch ms                    */
+const DEFAULT_SPAN_MS = 24 * 3600 * 1000;
+let viewRange = { t0: Date.now() - (STATE.span || DEFAULT_SPAN_MS), t1: Date.now() };
 
-const inView = r => !viewRange || (r.t != null && r.t >= viewRange.t0 && r.t <= viewRange.t1);
-const view = track => viewRange ? track.rows.filter(inView) : track.rows;
+const inView = r => r.t != null && r.t >= viewRange.t0 && r.t <= viewRange.t1;
+const view = track => track.rows.filter(inView);
 
 /* Set when the next render should jump the cursor to the newest sample. */
 let selectEnd = false;
 
+/* Set while the directory listing is in flight; the files have their own flag. */
+let listing = false;
+
 const selected = () => TRACKS.filter(t => t.on && t.rows && t.rows.length);
+
+/* When a log starts, from its name, or from its first sample for one picked
+   off the disk. */
+const trackStart = t => fileStart(t.name) ?? (t.rows && t.rows.length ? t.rows[0].t : 0);
+
+/* Every sample in the window, whatever file it came from, oldest first. The live
+   feed overlaps the file it is appended to and files can overlap each other, so
+   the rows are sorted and a timestamp already taken is dropped.
+   The graph, the scrubber and the stats box all run off this. */
+function windowRows() {
+  const rows = [];
+  const merged = [];
+
+  for (const t of selected()) {
+    for (const r of t.rows) {
+      if (inView(r)) { rows.push(r); }
+    }
+  }
+
+  rows.sort((a, b) => a.t - b.t);
+
+  for (const r of rows) {
+    if (!merged.length || r.t !== merged[merged.length - 1].t) { merged.push(r); }
+  }
+  return merged;
+}
 const byKey = k => TRACKS.find(t => t.key === k);
 
-/* The list as shown: newest name first. Sorted here rather than in TRACKS so a
-   refresh or a file picked by hand lands in place instead of at the end. */
+/* Newest name first, which is the order tracksInWindow() reads them in. */
 const listedTracks = () =>
   [...TRACKS].sort((a, b) => b.name.localeCompare(a.name, undefined, { numeric: true }));
 
 function addTrack(t) {
   if (byKey(t.key)) return byKey(t.key);
-  t.color = TRACK_COLORS[TRACKS.length % TRACK_COLORS.length];
   t.rows = null;
   t.on = false;
   TRACKS.push(t);
@@ -436,26 +466,6 @@ function addTrack(t) {
 /* --------------------------------------------------------------- render -- */
 
 const GAP_MS = 10000;   /* longer than this between samples = break the line */
-
-function metres(a, b) {
-  const R = 6371000, rad = Math.PI / 180;
-  const dLat = (b.lat - a.lat) * rad;
-  const dLon = (b.lon - a.lon) * rad * Math.cos((a.lat + b.lat) / 2 * rad);
-  return Math.hypot(dLat, dLon) * R;
-}
-
-function fmtDuration(ms) {
-  const s = Math.round(ms / 1000);
-  return `${String(Math.floor(s / 3600)).padStart(2, "0")}:` +
-         `${String(Math.floor(s / 60) % 60).padStart(2, "0")}:` +
-         `${String(s % 60).padStart(2, "0")}`;
-}
-
-function pathLength(rows) {
-  let d = 0;
-  for (let i = 1; i < rows.length; i++) d += metres(rows[i - 1], rows[i]);
-  return d;
-}
 
 /* Logs are timestamped UTC; every time shown is the browser's local zone. */
 const pad2 = n => String(n).padStart(2, "0");
@@ -481,7 +491,7 @@ function popupHtml(r, track) {
 }
 
 function drawTrack(track, rows, mode) {
-  const color = colorFn(mode, track, rows);
+  const color = colorFn(mode, rows);
 
   /* One polyline per run of same-coloured samples, so a 10k sample log stays
      a few dozen layers instead of 10k of them. */
@@ -519,6 +529,7 @@ function drawTrack(track, rows, mode) {
 }
 
 let cursorMarker = null;
+let fitted = false;   /* the map is fitted to the track once, when the page opens */
 
 function redraw(fit) {
   trackLayer.clearLayers();
@@ -527,94 +538,55 @@ function redraw(fit) {
   cursorMarker = null;
 
   const shown = selected();
-  const mode = effectiveMode();
+  const mode = colorMode;
   const drawn = [];
   for (const t of shown) {
     const rows = view(t);                  /* only the selected time window */
     if (rows.length > 1) { drawTrack(t, rows, mode); drawn.push(rows); }
   }
 
-  document.getElementById("legend").innerHTML = shown.length ? legendFor(mode, shown) : "";
-  renderList();
-  renderStats();
+  const legend = document.getElementById("legend");
 
-  if (fit && drawn.length) {
+  legend.innerHTML = shown.length ? legendFor(mode, shown) : "";
+  legend.classList.toggle("hidden", !legend.innerHTML);
+  renderBusy();
+  renderCursor();
+
+  if (fit && !fitted && drawn.length) {
     /* Cap the auto-fit: a track a few metres long would otherwise slam into
        MAX_ZOOM and show nothing but upscaled tile mush. */
     map.fitBounds(L.latLngBounds(drawn.flat().map(r => [r.lat, r.lon])).pad(0.05),
                   { maxZoom: 20 });
+    fitted = true;
   }
 }
 
-/* ------------------------------------------------------------- sidebar --- */
+/* ------------------------------------------------------------ progress -- */
 
-function renderList() {
-  const ul = document.getElementById("files");
-  ul.innerHTML = "";
+function renderBusy() {
+  const pending = TRACKS.filter(t => t.loading).length;
 
-  for (const t of listedTracks()) {
-    const li = document.createElement("li");
-    li.className = (t.on ? "on " : "") + (t.key === activeKey ? "active" : "");
-    li.title = t.url || t.name;
-
-    const meta = t.rows ? `${t.rows.length} pts` : (t.loading ? "loading…" : "");
-    li.innerHTML =
-      `<span class="swatch" style="background:${t.on ? t.color : "#3a424b"}"></span>` +
-      `<span class="name">${t.name}</span><span class="meta">${meta}</span>` +
-      `<button class="reload" title="Reload this file">&#x21bb;</button>`;
-
-    li.addEventListener("click", () => toggle(t));
-    li.querySelector(".reload").addEventListener("click", e => { e.stopPropagation(); reload(t); });
-    ul.appendChild(li);
-  }
-
-  if (!TRACKS.length) {
-    ul.innerHTML = `<li class="meta" style="cursor:default">No logs listed yet.</li>`;
-  }
-
+  document.getElementById("busy").classList.toggle("hidden", !pending && !listing);
   liveButton();   /* which file live samples would go to may have just changed */
 }
 
-/* The file the stats box, the scrubber and the graph all follow: whichever was
-   clicked last, or the last one still shown. */
-function statsTarget() {
-  const shown = selected();
-  const active = byKey(activeKey);
-  return (active && active.on && active.rows) ? active : shown[shown.length - 1];
-}
+/* The cursor follows the newest sample until the user moves it. */
+function renderCursor() {
+  const rows = windowRows();
 
-function renderStats() {
-  const box = document.getElementById("statsBox");
-  const shown = selected();
-  const target = statsTarget();
+  if (!rows.length) {
+    document.getElementById("sample").classList.add("hidden");
+    drawChart();
+    return;
+  }
 
-  chartTrack = target || null;
-  if (!target || !view(target).length) { box.classList.add("hidden"); drawChart(); return; }
-  box.classList.remove("hidden");
-  document.getElementById("statsTitle").textContent = target.name;
-
-  const rows = view(target), first = rows[0], last = rows[rows.length - 1];
-  const soc = rows.filter(r => r.soc != null);
-  const dist = pathLength(rows);
-  const line = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
-
-  document.getElementById("stats").innerHTML =
-    line("Samples", rows.length) +
-    line("Duration", (first.t != null && last.t != null) ? fmtDuration(last.t - first.t) : "?") +
-    line("Path length", dist > 1000 ? (dist / 1000).toFixed(2) + " km" : dist.toFixed(0) + " m") +
-    line("Battery", soc.length ? `${soc[0].soc} % &rarr; ${soc[soc.length - 1].soc} %` : "?") +
-    line("Bump / lift", `${rows.filter(r => r.bump).length} / ${rows.filter(r => r.lift).length}`) +
-    (shown.length > 1 ? line("Shown", `${shown.length} files`) : "");
-
-  const slider = document.getElementById("slider");
-  slider.max = rows.length - 1;
-  if (selectEnd || +slider.value > rows.length - 1) slider.value = rows.length - 1;
+  if (selectEnd || chartIndex > rows.length - 1) { chartIndex = rows.length - 1; }
   selectEnd = false;
-  updateCursor(target, +slider.value);
+  updateCursor(chartIndex);
 }
 
-function updateCursor(track, i) {
-  const r = view(track)[i];
+function updateCursor(i) {
+  const r = windowRows()[i];
   if (!r) return;
   chartIndex = i;
   drawChart();
@@ -623,18 +595,14 @@ function updateCursor(track, i) {
     { radius: 6, color: "#fff", weight: 2, fillColor: "#4cc9f0", fillOpacity: 1 }).addTo(markerLayer);
 
   const line = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
-  document.getElementById("cursor").innerHTML =
-    line("Time", stamp(r)) +
-    line("State / SoC", `${stateName(r.state)} / ${r.soc ?? "?"} %`) +
-    line("Sats / HDOP", `${r.sats ?? "?"} / ${r.hdop ?? "?"}`) +
-    line("Wifi", r.wifi == null ? "?" : `${r.wifi} dBm`) +
-    (r.volt == null && r.current == null ? ""
-      : line("Battery", `${r.volt ?? "?"} V / ${r.current ?? "?"} A`)) +
-    line("Wire L/R/near", `${r.wire_left ?? "?"} / ${r.wire_right ?? "?"} / ${r.near_wire ?? "?"}`);
+  const box = document.getElementById("sample");
+
+  box.innerHTML = line("Time", stamp(r)) + line("SoC", `${r.soc ?? "?"} %`) + line("State", stateName(r.state));
+  box.classList.remove("hidden");
 }
 
 /* ---------------------------------------------------------------- graph -- */
-/* Time on x, one channel on y, for the file the stats box is following. */
+/* Time on x, one channel on y, for every sample in the window. */
 
 const CHANNELS = {
   soc:   { label: "Battery SoC", unit: " %", lo: 0, hi: 100, get: r => r.soc },
@@ -646,11 +614,12 @@ const CHANNELS = {
   state: { label: "State",       unit: "",   lo: 0, tick: 1, get: r => r.state, text: stateName }
 };
 
-/* r leaves room for half of the last hh:mm:ss label, which is centred on x1. */
-const PAD = { l: 42, r: 26, t: 8, b: 18 };
+let graphChannel = CHANNELS[STATE.channel] ? STATE.channel : "soc";
+
+/* The end labels are aligned inwards, so r only keeps the axis off the edge. */
+const PAD = { l: 42, r: 8, t: 8, b: 18 };
 
 const chartCanvas = document.getElementById("chartCanvas");
-let chartTrack = null;      /* track being graphed                      */
 let chartIndex = 0;         /* row index the scrub cursor sits on       */
 let chartPts   = [];        /* {x, y, i} in canvas pixels, for hit test */
 let chartGeom  = null;      /* {x0, x1, y0, y1, t0, t1} pixels <-> time */
@@ -709,25 +678,19 @@ function drawChart() {
   chartPts = [];
   chartGeom = null;
 
-  const valueEl = document.getElementById("chartValue");
-  document.getElementById("chartName").textContent = chartTrack ? chartTrack.name : "";
-  const zoomSpan = viewRange ? viewRange.t1 - viewRange.t0 : 0;
-  document.getElementById("chartZoom").textContent = !chartTrack ? ""
-    : viewRange ? `${clock(viewRange.t0, zoomSpan)}–${clock(viewRange.t1, zoomSpan)}` +
-                  ` · right-click to reset`
-    : "drag to zoom";
-  valueEl.innerHTML = "";
-
   const note = msg => {
     ctx.fillStyle = "#78828c";
     ctx.font = "12px system-ui, sans-serif";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(msg, w / 2, h / 2);
   };
-  if (!chartTrack) { note("Show a log file to graph it"); return; }
+  const rows = windowRows();
+  if (!rows.length) {
+    note(listing || TRACKS.some(t => t.loading) ? "Loading…" : "No samples in this window");
+    return;
+  }
 
-  const ch = CHANNELS[document.getElementById("channel").value] || CHANNELS.soc;
-  const rows = view(chartTrack);
+  const ch = CHANNELS[graphChannel];
   const data = [];
   for (let i = 0; i < rows.length; i++) {
     const v = ch.get(rows[i]);
@@ -740,7 +703,7 @@ function drawChart() {
   const levels = ch.text ? [...new Set(data.map(d => d.v))].sort((a, b) => a - b) : null;
   const at = v => levels ? levels.indexOf(v) : v;
 
-  const t0 = data[0].t, t1 = data[data.length - 1].t;
+  const t0 = viewRange.t0, t1 = viewRange.t1;
   let lo = levels ? -0.3 : ch.lo != null ? ch.lo : Math.min(...data.map(d => d.v));
   let hi = levels ? levels.length - 0.7 : ch.hi != null ? ch.hi : Math.max(...data.map(d => d.v));
   if (!levels && ch.hi == null) hi = Math.max(hi, lo + 1) * 1.05;
@@ -774,21 +737,33 @@ function drawChart() {
     ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
     ctx.fillText(ch.text ? ch.text(v) : String(+v.toFixed(3)) + ch.unit, x0 - 5, y);
   }
-  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  ctx.textBaseline = "top";
   const span = t1 - t0;
   const tstep = tickStep(span, Math.max(2, Math.min(8, Math.floor((x1 - x0) / 80))));
+
+  /* Both ends of the window carry the date: a round tick is only a clock time,
+     and the ends are what the graph is showing. A tick under one of them would
+     overlap, so it keeps its gridline and loses its label. */
+  const endLabel = t => mmdd(t) + " " + clock(t, span);
+  const endRoom = Math.max(ctx.measureText(endLabel(t0)).width, ctx.measureText(endLabel(t1)).width) + 6;
+
+  ctx.textAlign = "center";
   for (const t of tickTimes(t0, t1, tstep)) {
     const x = Math.round(px(t)) + 0.5;
     ctx.strokeStyle = "#232930";
     ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
-    ctx.fillText(tickLabel(t, tstep), x, y1 + 3);
+    if (x - x0 > endRoom && x1 - x > endRoom) { ctx.fillText(tickLabel(t, tstep), x, y1 + 3); }
   }
+  ctx.textAlign = "left";
+  ctx.fillText(endLabel(t0), x0, y1 + 3);
+  ctx.textAlign = "right";
+  ctx.fillText(endLabel(t1), x1, y1 + 3);
   ctx.strokeStyle = "#3a424b";
   ctx.beginPath(); ctx.moveTo(x0 + .5, y0); ctx.lineTo(x0 + .5, y1 + .5); ctx.lineTo(x1, y1 + .5);
   ctx.stroke();
 
   /* the trace itself, broken wherever the log has a gap */
-  ctx.strokeStyle = chartTrack.color; ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#4cc9f0"; ctx.lineWidth = 1.5;
   ctx.lineJoin = "round"; ctx.lineCap = "round";
   ctx.beginPath();
   let pen = false;
@@ -801,7 +776,7 @@ function drawChart() {
   }
   ctx.stroke();
 
-  /* scrub cursor, tied to the slider and the marker on the map */
+  /* scrub cursor, tied to the marker on the map */
   const cur = rows[chartIndex];
   if (cur && cur.t != null && cur.t >= t0 && cur.t <= t1) {
     const x = Math.round(px(cur.t)) + 0.5;
@@ -813,7 +788,6 @@ function drawChart() {
       ctx.fillStyle = "#4cc9f0";
       ctx.beginPath(); ctx.arc(x, py(v), 3, 0, Math.PI * 2); ctx.fill();
     }
-    valueEl.innerHTML = `${clock(cur.t, span)} &middot; <b>${v == null ? "?" : ch.text ? ch.text(v) : v + ch.unit}</b>`;
   }
 
   /* the range being dragged out right now */
@@ -823,8 +797,6 @@ function drawChart() {
     ctx.fillRect(a, y0, b - a, y1 - y0);
     ctx.strokeStyle = "#4cc9f0"; ctx.lineWidth = 1;
     ctx.strokeRect(Math.round(a) + .5, y0 + .5, Math.round(b - a), y1 - y0 - 1);
-    const ta = pxToTime(a), tb = pxToTime(b);
-    valueEl.innerHTML = `${clock(ta, tb - ta)} – ${clock(tb, tb - ta)}`;
   }
 }
 
@@ -837,32 +809,35 @@ function pxToTime(x) {
   return g.t0 + f * (g.t1 - g.t0);
 }
 
-/* A click without a drag just moves the scrub cursor, as the slider does. */
+/* A click without a drag just moves the scrub cursor. */
 function scrubTo(x) {
-  if (!chartTrack || !chartPts.length) return;
+  if (!chartPts.length) return;
   let best = chartPts[0];
   for (const p of chartPts) if (Math.abs(p.x - x) < Math.abs(best.x - x)) best = p;
-  document.getElementById("slider").value = best.i;
-  updateCursor(chartTrack, best.i);
+  updateCursor(best.i);
+}
+
+/* The one way the window ever changes: store it, then load whatever files it
+   now reaches over. */
+function setRange(t0, t1) {
+  viewRange = { t0, t1 };
+  selectEnd = true;
+  loadWindow();
 }
 
 /* Narrow to a time window. Each selection is taken inside the current one, so
-   dragging repeatedly keeps zooming in; right-click goes back to the whole log. */
+   dragging repeatedly keeps zooming in. */
 function zoomToRange(t0, t1) {
-  if (!chartTrack) return;
   const lo = Math.min(t0, t1), hi = Math.max(t0, t1);
-  const kept = chartTrack.rows.filter(r => r.t != null && r.t >= lo && r.t <= hi);
+  const kept = windowRows().filter(r => r.t >= lo && r.t <= hi);
+
   if (kept.length < 2) return;                 /* too thin to be useful */
-  viewRange = { t0: lo, t1: hi };
-  selectEnd = true;
-  redraw(true);
+  setRange(lo, hi);
 }
 
-function resetRange() {
-  if (!viewRange) return;
-  viewRange = null;
-  selectEnd = true;
-  redraw(true);
+function zoomOut() {
+  const span = viewRange.t1 - viewRange.t0;
+  setRange(viewRange.t0 - span / 2, viewRange.t1 + span / 2);
 }
 
 const DRAG_PX = 4;          /* shorter than this counts as a click, not a drag */
@@ -891,14 +866,19 @@ chartCanvas.addEventListener("pointerup", e => {
 
 chartCanvas.addEventListener("pointercancel", () => { brush = null; drawChart(); });
 
-chartCanvas.addEventListener("contextmenu", e => { e.preventDefault(); resetRange(); });
+chartCanvas.addEventListener("contextmenu", e => { e.preventDefault(); zoomOut(); });
 
-document.getElementById("channel").addEventListener("change", () => { drawChart(); saveState(); });
+document.getElementById("earlier").addEventListener("click", () =>
+  setRange(viewRange.t0 - (viewRange.t1 - viewRange.t0) / 2, viewRange.t1));
+
+document.getElementById("later").addEventListener("click", () =>
+  setRange(viewRange.t0, viewRange.t1 + (viewRange.t1 - viewRange.t0) / 2));
+
 new ResizeObserver(() => drawChart()).observe(chartCanvas);
 
 /* -------------------------------------------------------------- loading -- */
 
-/* Only failures are worth sidebar space; progress and counts stay in the list. */
+/* Only failures are worth the space; the spinner says when something is loading. */
 const statusEl = document.getElementById("status");
 function say(msg, isError) {
   statusEl.textContent = isError ? msg : "";
@@ -906,20 +886,16 @@ function say(msg, isError) {
 }
 
 const WORKLOG_DIR = "worklogs/";
-const CORS_HINT = " — or pick the .csv files with the file chooser.";
 
 async function fetchRows(track) {
-  if (track.file) return parseCsv(await track.file.text());
   const res = await fetch(track.url, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
   return parseCsv(await res.text());
 }
 
+/* Only local files picked with Load file take this route; server logs follow
+   the window. */
 async function toggle(track) {
-  /* A different set of files means a different time span — start from all of
-     it rather than keeping a window that may not overlap the new log at all. */
-  viewRange = null;
-
   if (track.on) {                       /* clicking a shown file hides it */
     track.on = false;
     if (activeKey === track.key) activeKey = null;
@@ -932,24 +908,83 @@ async function toggle(track) {
 
   if (!track.rows) {
     track.loading = true;
-    renderList();
+    renderBusy();
     say("Loading " + track.name + " …");
     try {
       const { rows, skipped } = await fetchRows(track);
       track.loading = false;
-      if (!rows.length) { say("No usable rows in " + track.name, true); renderList(); return; }
+      if (!rows.length) { say("No usable rows in " + track.name, true); renderBusy(); return; }
       track.rows = rows;
       say(`${track.name}: ${rows.length} samples` + (skipped ? `, ${skipped} rows skipped` : ""));
     } catch (e) {
       track.loading = false;
-      say("Could not load " + track.name + ": " + e.message + CORS_HINT, true);
-      renderList();
+      say("Could not load " + track.name + ": " + e.message, true);
+      renderBusy();
       return;
     }
   }
 
   track.on = true;
+  if (track.rows[0].t != null) {
+    viewRange = { t0: track.rows[0].t, t1: track.rows[track.rows.length - 1].t };
+  }
   selectEnd = true;                     /* a freshly shown file opens at its newest sample */
+  redraw(true);
+  saveState();
+}
+
+/* mowerlog_YYYYMMDD_HH_MM_SS.csv, named in UTC when the file was started. */
+function fileStart(name) {
+  const m = /(\d{4})(\d{2})(\d{2})_(\d{2})_(\d{2})_(\d{2})/.exec(name);
+
+  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null;
+}
+
+/* Every server log overlapping the window. A file runs from its own start until
+   the next newer one starts, so the names alone say which ones are worth
+   fetching. The newest is still being written and has no end: the mower clock
+   runs ahead of this browser often enough that testing it against Date.now()
+   drops the live samples just as you zoom in on them. */
+function tracksInWindow() {
+  const logs = listedTracks().filter(t => fileStart(t.name) != null);
+  const hits = [];
+
+  for (let i = 0; i < logs.length; i++) {
+    const from = fileStart(logs[i].name);
+    const to = i ? fileStart(logs[i - 1].name) : Infinity;
+    if (from <= viewRange.t1 && to >= viewRange.t0) hits.push(logs[i]);
+  }
+  return hits;
+}
+
+/* Fetched rows are kept, so walking the window back and forth over one file
+   costs nothing the second time. */
+async function loadWindow(refetch) {
+  const want = tracksInWindow();
+
+  selectEnd = true;          /* a window just loaded opens on its newest sample */
+
+  for (const t of TRACKS) {
+    if (!want.includes(t)) t.on = false;
+  }
+
+  for (const t of want) {
+    if (!t.rows || refetch) {
+      t.loading = true;
+      renderBusy();
+      try {
+        const { rows } = await fetchRows(t);
+        t.rows = rows.length ? withLiveTail(rows, t.rows) : t.rows;
+      } catch (e) {
+        say("Could not load " + t.name + ": " + e.message, true);
+      }
+      t.loading = false;
+    }
+    t.on = !!(t.rows && t.rows.length);
+  }
+
+  const newest = want.find(t => t.on);
+  if (newest) activeKey = newest.key;
   redraw(true);
   saveState();
 }
@@ -963,24 +998,13 @@ function withLiveTail(rows, had) {
   return tail.length ? rows.concat(tail) : rows;
 }
 
-/* Re-read one file from the server; a log that is still being written grows.
-   Sitting on the newest sample means follow the new end, otherwise stay put. */
-async function reload(track) {
-  const shownRows = track === statsTarget() ? view(track) : null;
-  const wasLast = !!shownRows && +document.getElementById("slider").value >= shownRows.length - 1;
-
-  track.loading = true;
-  renderList();
-  try {
-    const { rows } = await fetchRows(track);
-    track.rows = rows.length ? withLiveTail(rows, track.rows) : track.rows;
-  } catch (e) {
-    say("Could not reload " + track.name + ": " + e.message, true);
-  }
-  track.loading = false;
-  selectEnd = wasLast;
-  redraw(false);
-  renderList();
+/* What the mower has written so far, whether or not it is on the air. */
+async function reload() {
+  listing = true;
+  renderBusy();
+  await listDirectory();
+  listing = false;
+  await loadWindow(true);
 }
 
 /* Directory listing: accepts a JSON array of names, or an HTML index whose
@@ -997,7 +1021,7 @@ async function listDirectory() {
     contentType = res.headers.get("content-type") || "";
     text = await res.text();
   } catch (e) {
-    fail("Directory listing unavailable: " + e.message + CORS_HINT);
+    fail("Directory listing unavailable: " + e.message);
     return;
   }
 
@@ -1018,13 +1042,12 @@ async function listDirectory() {
   names = [...new Set(names.filter(Boolean))].sort().reverse();   /* newest first */
   if (!names.length) {
     fail("No .csv files found at " + dirUrl + " (directory listing may be disabled).");
-    renderList();
+    renderBusy();
     return;
   }
 
   for (const name of names) addTrack({ key: dirUrl + name, name, url: dirUrl + name });
-  say(`${names.length} log file(s) listed. Click one to show it.`);
-  renderList();
+  renderBusy();
 }
 
 /* --------------------------------------------------------- own layers -- */
@@ -1119,11 +1142,13 @@ async function loadLayers() {
 
 const LIVE_URL = `wss://${location.host}/webbsoket`;
 const LIVE_RETRY_MS = 30000;   /* reopen a socket that closed or went quiet */
+const LIVE_RELOAD_MS = 90000;  /* long enough for the rsync to have caught up */
 const LIVE_STALE_MS = 5000;    /* no sample for this long: not reachable */
 
 let liveOn = false;
 let liveSocket = null;
 let liveRetry = null;
+let liveReload = null;
 let liveSeen = 0;              /* when the newest sample arrived */
 let liveTail = "";             /* frames split anywhere, so keep the part line */
 const liveDecoder = new TextDecoder();
@@ -1132,9 +1157,19 @@ const liveUp = () => Date.now() - liveSeen < LIVE_STALE_MS;
 
 /* Pressed and receiving is "on", pressed and silent is "wait": the mower is
    off or out of range, and the retry keeps trying until it answers. */
+/* Live samples belong to the newest log on show. */
+function liveTarget() {
+  let newest = null;
+
+  for (const t of selected()) {
+    if (!newest || trackStart(t) > trackStart(newest)) newest = t;
+  }
+  return newest;
+}
+
 function liveButton() {
   const b = document.getElementById("live");
-  const target = statsTarget();
+  const target = liveTarget();
 
   b.disabled = !target;
   b.classList.toggle("on", liveOn && liveUp());
@@ -1149,24 +1184,25 @@ function liveButton() {
 
 /* Sitting on the newest sample means follow the new end, otherwise stay put. */
 function liveAppend(rows) {
-  const target = statsTarget();
+  const target = liveTarget();
   if (!target) return false;
 
   const last = target.rows[target.rows.length - 1];
   const fresh = rows.filter(r => !last || r.t == null || last.t == null || r.t > last.t);
   if (!fresh.length) return false;
 
-  const shown = view(target);
-  const wasLast = +document.getElementById("slider").value >= shown.length - 1;
-  const atEnd = !!viewRange && !!last && last.t != null && viewRange.t1 >= last.t;
+  const wasLast = chartIndex >= windowRows().length - 1;
+  const atEnd = !!last && last.t != null && viewRange.t1 >= last.t;
   const newest = fresh[fresh.length - 1].t;
 
   target.rows.push(...fresh);
 
-  /* A window zoomed onto the end of the log would otherwise keep showing the
-     same samples while new ones pile up past its right edge. Stretch its right
-     edge to the newest sample, leaving the start where the zoom put it. */
-  if (wasLast && atEnd && newest > viewRange.t1) viewRange.t1 = newest;
+  /* A window sitting on the end of the log would otherwise keep showing the same
+     samples while new ones pile up past its right edge. Slide the whole window
+     up to the newest sample so its span still holds. */
+  if (wasLast && atEnd && newest > viewRange.t1) {
+    viewRange = { t0: newest - (viewRange.t1 - viewRange.t0), t1: newest };
+  }
 
   selectEnd = wasLast;
   return true;
@@ -1287,26 +1323,56 @@ async function woOpen() {
 
 woButton();
 
-/* ------------------------------------------------------------- sidebar -- */
-/* Hiding the list gives the map and the graph the whole window; Leaflet has to
-   be told the map changed size. */
+/* ----------------------------------------------------------------- menu -- */
 
-function collapseSidebar(on) {
-  const b = document.getElementById("collapse");
+const menuList = document.getElementById("menuList");
+const colorPanel = document.getElementById("colorPanel");
+const channelPanel = document.getElementById("channelPanel");
 
-  document.getElementById("sidebar").classList.toggle("collapsed", on);
-  b.innerHTML = on ? "&rsaquo;" : "&lsaquo;";
-  b.title = on ? "Show the sidebar" : "Hide the sidebar";
-  map.invalidateSize();
-  drawChart();
+/* "" closes the lot. */
+function openPanel(name) {
+  menuList.classList.add("hidden");
+  colorPanel.classList.toggle("hidden", name !== "color");
+  channelPanel.classList.toggle("hidden", name !== "channel");
+  layerControl.getContainer().classList.toggle("hidden", name !== "layers");
 }
 
-/* --------------------------------------------------------------- events -- */
+/* A list of labels, one of them marked, that sets `pick` and closes. */
+function fillPanel(panel, items, current, pick) {
+  for (const [key, label] of items) {
+    const b = document.createElement("button");
 
-document.getElementById("collapse").addEventListener("click", () => {
-  collapseSidebar(!document.getElementById("sidebar").classList.contains("collapsed"));
-  saveState();
+    b.textContent = label;
+    b.classList.toggle("on", key === current);
+    b.addEventListener("click", () => {
+      for (const other of panel.children) { other.classList.toggle("on", other === b); }
+      openPanel("");
+      pick(key);
+      saveState();
+    });
+    panel.appendChild(b);
+  }
+}
+
+document.getElementById("menuBtn").addEventListener("click", e => {
+  e.preventDefault();
+  const open = menuList.classList.contains("hidden");
+  openPanel("");
+  menuList.classList.toggle("hidden", !open);
 });
+
+for (const [item, label] of [["layers", "Layers"], ["color", "Line color"], ["channel", "Graph data"]]) {
+  const b = document.createElement("button");
+
+  b.textContent = label;
+  b.addEventListener("click", () => openPanel(item));
+  menuList.appendChild(b);
+}
+
+fillPanel(colorPanel, COLOR_MODES, colorMode, key => { colorMode = key; redraw(false); });
+fillPanel(channelPanel, Object.entries(CHANNELS).map(([key, ch]) => [key, ch.label]), graphChannel, key => { graphChannel = key; drawChart(); });
+
+/* --------------------------------------------------------------- events -- */
 
 document.getElementById("workorder").addEventListener("click", woOpen);
 
@@ -1314,28 +1380,20 @@ document.getElementById("abort").addEventListener("click", () => woSend(2, ""));
 
 document.getElementById("woCancel").addEventListener("click", () => woDialog.close());
 
+/* Switching live on takes what the server holds right now, and once more when the
+   rsync has caught up with the samples the feed delivered in the meantime. */
 document.getElementById("live").addEventListener("click", () => {
   liveOn = !liveOn;
-  if (liveOn) liveConnect(); else liveDisconnect();
-  liveButton();
-});
+  clearTimeout(liveReload);
 
-document.getElementById("load").addEventListener("click", () => document.getElementById("file").click());
-
-document.getElementById("refresh").addEventListener("click", () => listDirectory());
-
-document.getElementById("file").addEventListener("change", e => {
-  for (const f of e.target.files) {
-    const t = addTrack({ key: "file:" + f.name + ":" + f.size, name: f.name, file: f });
-    if (!t.on) toggle(t);
+  if (liveOn) {
+    liveConnect();
+    reload();
+    liveReload = setTimeout(reload, LIVE_RELOAD_MS);
+  } else {
+    liveDisconnect();
   }
-});
-
-document.getElementById("colorBy").addEventListener("change", () => { redraw(false); saveState(); });
-
-document.getElementById("slider").addEventListener("input", e => {
-  const target = statsTarget();
-  if (target) updateCursor(target, +e.target.value);
+  liveButton();
 });
 
 /* Left / right arrow steps the scrub cursor one sample, unless a form control
@@ -1345,41 +1403,32 @@ document.addEventListener("keydown", e => {
   const tag = (e.target.tagName || "").toLowerCase();
   if (tag === "input" || tag === "select" || tag === "textarea") return;
 
-  const target = statsTarget();
-  if (!target) return;
-  const rows = view(target);
-  const i = Math.max(0, Math.min(rows.length - 1, chartIndex + (e.key === "ArrowRight" ? 1 : -1)));
-  document.getElementById("slider").value = i;
-  updateCursor(target, i);
+  const rows = windowRows();
+  if (!rows.length) return;
+  updateCursor(Math.max(0, Math.min(rows.length - 1, chartIndex + (e.key === "ArrowRight" ? 1 : -1))));
   e.preventDefault();
 });
 
 /* ----------------------------------------------------------- start-up ---- */
-/* ?log=<name> shows those logs, else what was shown last time, else the first
-   one in the list. Remembered logs that have since been rotated away are
-   dropped rather than reported. */
+/* ?log=<name> shows exactly those logs and takes its window from them; without
+   it the window decides, and it opens on the last 24 hours. */
 
-if (STATE.collapsed) collapseSidebar(true);
-if (STATE.colorBy) document.getElementById("colorBy").value = STATE.colorBy;
-if (STATE.channel) document.getElementById("channel").value = STATE.channel;
 
 const startTracks = new URLSearchParams(location.search).getAll("log")
   .map(name => addTrack({ key: WORKLOG_DIR + name, name, url: WORKLOG_DIR + name }));
-renderList();
+renderBusy();
 
 (async () => {
+  listing = true;
+  renderBusy();
   await listDirectory();
+  listing = false;
 
-  const remembered = (STATE.logs || []).map(byKey).filter(Boolean);
-  const initial = startTracks.length ? startTracks
-                : remembered.length ? remembered
-                : listedTracks().slice(0, 1);
-  for (const t of initial) await toggle(t);
-
-  /* toggle() leaves the last one active; put the cursor back on the file that
-     had it, as long as that file actually came back. */
-  const active = byKey(STATE.active);
-  if (!startTracks.length && active && active.on) { activeKey = active.key; redraw(false); }
+  if (startTracks.length) {
+    for (const t of startTracks) await toggle(t);
+  } else {
+    await loadWindow();
+  }
 
   await loadLayers();
 })();
