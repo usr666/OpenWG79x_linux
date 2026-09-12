@@ -56,7 +56,12 @@
 
   /* ---- one block per command ---- */
   .cmd { margin-bottom: 12px; }
-  .cmd .field { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .cmd h2 { cursor: pointer; }
+  .cmd h2::before { content: "▸ "; }
+  .cmd.open h2::before { content: "▾ "; }
+  .cmd .field, .cmd .row { display: none; }
+  .cmd.open .field { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .cmd.open .row { display: flex; }
   .cmd .field label { flex: 1; color: #9aa4ae; }
   .cmd .field input, .cmd .field select { width: 90px; flex: none; }
   .cmd.point .field input { width: 110px; }
@@ -67,16 +72,17 @@
   .hidden { display: none !important; }
 
   /* ---- load picker ---- */
-  #loadDialog {
+  #loadDialog, #delDialog {
     background: #181b1f; color: #e6e6e6; border: 1px solid #3a424b; border-radius: 6px;
     padding: 10px; min-width: 240px; font: inherit;
   }
-  #loadDialog::backdrop { background: rgba(0, 0, 0, .5); }
-  #loadList { list-style: none; margin: 0 0 8px; padding: 0; max-height: 50vh; overflow-y: auto; }
-  #loadList li { padding: 5px 6px; border-radius: 4px; cursor: pointer; user-select: none; }
-  #loadList li:hover { background: #22262b; }
-  #loadList li.none { color: #78828c; cursor: default; }
-  #loadList li.none:hover { background: none; }
+  #loadDialog::backdrop, #delDialog::backdrop { background: rgba(0, 0, 0, .5); }
+  #loadList, #delList { list-style: none; margin: 0 0 8px; padding: 0; max-height: 50vh; overflow-y: auto; }
+  #loadList li, #delList li { padding: 5px 6px; border-radius: 4px; cursor: pointer; user-select: none; }
+  #loadList li:hover, #delList li:hover { background: #22262b; }
+  #loadList li.none, #delList li.none { color: #78828c; cursor: default; }
+  #loadList li.none:hover, #delList li.none:hover { background: none; }
+  #delList label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
 
   .marker {
     width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
@@ -84,6 +90,8 @@
     font: 11px/17px system-ui, sans-serif; text-align: center; font-weight: 600;
   }
   .marker.on { background: #f9c74f; }
+  .marker.center { background: #43aa8b; }
+  .marker.target { background: #f3722c; }
   .marker.pending { background: none; border: 2px dashed #f9c74f; }
 </style>
 </head>
@@ -102,6 +110,7 @@
     </div>
     <div class="row" style="margin-bottom:0">
       <button id="download">Download</button>
+      <button id="del">Delete…</button>
     </div>
     <div id="fileName" style="margin-top:6px"></div>
   </section>
@@ -120,6 +129,15 @@
   <h2>Load workorder</h2>
   <ul id="loadList"></ul>
   <button id="loadCancel">Cancel</button>
+</dialog>
+
+<dialog id="delDialog">
+  <h2>Delete workorders</h2>
+  <ul id="delList"></ul>
+  <div class="row" style="margin-bottom:0">
+    <button id="delGo">Delete</button>
+    <button id="delCancel">Cancel</button>
+  </div>
 </dialog>
 
 <div id="main">
@@ -312,7 +330,15 @@ const COMMANDS = [
     { key: "ns",  label: "N/S",       type: "sel", options: [["N", "N"], ["S", "S"]], def: "N" },
     { key: "lon", label: "Longitude", type: "text", def: "" },
     { key: "ew",  label: "E/W",       type: "sel", options: [["E", "E"], ["W", "W"]], def: "E" }
-  ]}
+  ]},
+  { id: 5, name: "Mow", fields: [
+    { key: "time", label: "Mow time s", type: "num", min: 0, max: 65535, def: 600 }
+  ]},
+  { id: 6, name: "Go to charge", fields: [] },
+  { id: 7, name: "Mow within polygon", poly: true, fields: [
+    { key: "time", label: "Mow time s", type: "num", min: 0, max: 65535, def: 600 }
+  ]},
+  { id: 8, name: "Follow line", line: true, fields: [] }
 ];
 
 const byId = id => COMMANDS.find(c => c.id === id);
@@ -339,14 +365,31 @@ function buildCommands() {
 
     const buttons = document.createElement("div");
     buttons.className = "row";
-    buttons.innerHTML = `<button id="ins${cmd.id}">Insert</button><button id="rep${cmd.id}">Replace</button>`;
+    buttons.innerHTML = cmd.poly || cmd.line
+      ? `<button id="pick${cmd.id}">Pick ${cmd.poly ? "polygon" : "line"}</button><button id="done${cmd.id}">Done</button>`
+      : `<button id="ins${cmd.id}">Insert</button><button id="rep${cmd.id}">Replace</button>`;
     block.appendChild(buttons);
+
+    const replace = document.createElement("div");
+    replace.className = "row";
+    replace.innerHTML = `<button id="rep${cmd.id}">Replace</button>`;
+    if (cmd.poly) block.appendChild(replace);
     box.appendChild(block);
 
-    buttons.children[0].addEventListener("click", () => insertRow(cmd));
-    buttons.children[1].addEventListener("click", () => replaceRow(cmd));
+    buttons.children[0].addEventListener("click", () => cmd.poly || cmd.line ? pickStart(cmd) : insertRow(cmd));
+    buttons.children[1].addEventListener("click", () => cmd.poly || cmd.line ? pickDone(cmd) : replaceRow(cmd));
+    if (cmd.poly) replace.children[0].addEventListener("click", () => replacePoly(cmd));
+    block.querySelector("h2").addEventListener("click", () => openBlock(block));
     setFields(cmd, cmd.fields.map(f => f.def));
+    cmd.block = block;
   }
+  openBlock(COMMANDS[0].block);
+}
+
+/* One block open at a time: the column stays short, and the open one is what
+   Insert and Replace work on. */
+function openBlock(block) {
+  for (const b of document.querySelectorAll("#commands .cmd")) b.classList.toggle("open", b === block);
 }
 
 const fieldEl = (cmd, f) => document.getElementById(`f${cmd.id}_${f.key}`);
@@ -391,6 +434,10 @@ function describe(row) {
     case 2: return `turn ${v[1]}° ${v[2] === "1" ? "right" : "left"}  speed ${v[0]}%  disc ${v[3]}%${force(v[4])}`;
     case 3: return v[0] === "0" ? `wait ${v[1]}s` : `wait for ${event}, timeout ${v[1]}s`;
     case 4: return `point ${v[0]}${v[1]}  ${v[2]}${v[3]}`;
+    case 5: return `mow ${v[0]}s`;
+    case 6: return "go to charge";
+    case 7: return `mow polygon of ${v[5]} corners, ${v[0]}s`;
+    case 8: return `follow line of ${v[0]} points to point ${v[1]}`;
   }
   return "";
 }
@@ -423,7 +470,7 @@ function renderRows() {
 
   document.getElementById("fileName").textContent = name;
   document.getElementById("listName").textContent = name;
-  document.getElementById("listInfo").textContent = `${rows.length} command(s), inserting ` + (selected < 0 ? "at the end" : "after row " + (selected + 1));
+  document.getElementById("listInfo").textContent = `${rows.length} command(s), inserting ` + (selected < 0 ? "at the end" : "above row " + (selected + 1));
   document.getElementById("delete").disabled = selected < 0;
   drawPoints();
 }
@@ -434,7 +481,7 @@ function select(i) {
   selected = i;
 
   const row = rows[i];
-  if (row && !row.raw) setFields(byId(row.cmd), row.values);
+  if (row && !row.raw) { setFields(byId(row.cmd), row.values); openBlock(byId(row.cmd).block); }
   renderRows();
 }
 
@@ -449,9 +496,9 @@ function insertRow(cmd) {
 
   if (bad) { say(bad, true); return; }
 
-  const at = selected < 0 ? rows.length : selected + 1;
+  const at = selected < 0 ? rows.length : selected;
   rows.splice(at, 0, { cmd: cmd.id, values });
-  selected = at;
+  if (selected >= 0) selected++;        /* the selected row moved down */
   if (cmd.point) point.lat = "";        /* the click is a row now */
   say("");
   change();
@@ -467,6 +514,20 @@ function replaceRow(cmd) {
 
   rows[selected] = { cmd: cmd.id, values };
   if (cmd.point) point.lat = "";
+  say("");
+  change();
+}
+
+/* Only the mow time comes from the fields; the corners stay as they are drawn. */
+function replacePoly(cmd) {
+  const row = rows[selected];
+  const values = getFields(cmd);
+  const bad = checkFields(cmd, values);
+
+  if (!row || row.raw || row.cmd !== cmd.id) { say("Select a polygon row to replace", true); return; }
+  if (bad) { say(bad, true); return; }
+
+  row.values[0] = values[0];
   say("");
   change();
 }
@@ -500,8 +561,112 @@ function pointFields(latlng) {
   const values = [nmea(latlng.lat, 2), latlng.lat < 0 ? "S" : "N", nmea(latlng.lng, 3), latlng.lng < 0 ? "W" : "E"];
 
   setFields(byId(4), values);
+  openBlock(byId(4).block);
   Object.assign(point, { lat: values[0], ns: values[1], lon: values[2], ew: values[3] });
   drawPoints();
+}
+
+/* cmd 7 and cmd 8 carry their own point list, so both are built from map clicks
+   rather than from the fields: a polygon is mowtime, the centre to turn towards
+   from outside, numpoints, then four fields per corner, and a line is numpoints,
+   the target point, then four fields per point. The polygon centre starts at the
+   average of its corners; the line targets the point clicked last. */
+
+const PICK_MAX = 32;
+
+const pick = { cmd: null, pts: [] };
+
+const atLatLng = (v, i) => L.latLng(degrees(v[i], v[i + 1]), degrees(v[i + 2], v[i + 3]));
+
+const polyCentre = pts => L.latLng(pts.reduce((a, p) => a + p.lat, 0) / pts.length, pts.reduce((a, p) => a + p.lng, 0) / pts.length);
+
+const polyFields = ll => [nmea(ll.lat, 2), ll.lat < 0 ? "S" : "N", nmea(ll.lng, 3), ll.lng < 0 ? "W" : "E"];
+
+function pickStart(cmd) {
+  pick.cmd = pick.cmd === cmd ? null : cmd;
+  pick.pts = [];
+  say(pick.cmd ? `Click the ${cmd.poly ? "corners" : "points"} on the map, then Done` : "");
+  drawPoints();
+}
+
+function pickClick(latlng) {
+  pick.pts.push(latlng);
+  say(`${pick.pts.length} point(s) picked, click Done when finished`);
+  drawPoints();
+}
+
+function pickDone(cmd) {
+  const min = cmd.poly ? 3 : 2;
+  const n = pick.pts.length;
+  const values = getFields(cmd);
+  const bad = checkFields(cmd, values);
+
+  if (pick.cmd !== cmd || n < min || n > PICK_MAX) { say(`Pick ${min} to ${PICK_MAX} points on the map first`, true); return; }
+  if (bad) { say(bad, true); return; }
+
+  const at = selected < 0 ? rows.length : selected;
+  const fields = cmd.poly ? [values[0], ...polyFields(polyCentre(pick.pts)), String(n)] : [String(n), String(n)];
+
+  for (const ll of pick.pts) fields.push(...polyFields(ll));
+  rows.splice(at, 0, { cmd: cmd.id, values: fields });
+  if (selected >= 0) selected++;
+  pick.cmd = null;
+  pick.pts = [];
+  say("");
+  change();
+}
+
+/* The selected polygon gets a handle on every corner and on its centre; the
+   others are an outline with the centre marked. */
+function drawPolygon(row, i) {
+  const v = row.values;
+  const pts = [];
+  const centre = marker(atLatLng(v, 1), "c", "center", i === selected);
+
+  for (let k = 0; k < +v[5]; k++) pts.push(atLatLng(v, 6 + k * 4));
+  L.polygon(pts, { color: i === selected ? "#f9c74f" : "#43aa8b", weight: 2, opacity: .9, fillOpacity: .08 }).addTo(pathLayer);
+  centre.on("dragend", () => {
+    v.splice(1, 4, ...polyFields(centre.getLatLng()));
+    change();
+  });
+  centre.addTo(pathLayer);
+  if (i !== selected) return;
+
+  pts.forEach((ll, k) => {
+    const m = marker(ll, "", "on", true);
+
+    m.on("dragend", () => {
+      v.splice(6 + k * 4, 4, ...polyFields(m.getLatLng()));
+      change();
+    });
+    m.addTo(pathLayer);
+  });
+}
+
+/* The selected line gets a handle on every point, and clicking one makes it the
+   target the mower drives to. The target is marked whether selected or not. */
+function drawLine(row, i) {
+  const v = row.values;
+  const pts = [];
+
+  for (let k = 0; k < +v[0]; k++) pts.push(atLatLng(v, 2 + k * 4));
+  L.polyline(pts, { color: i === selected ? "#f9c74f" : "#43aa8b", weight: 2, opacity: .9 }).addTo(pathLayer);
+
+  pts.forEach((ll, k) => {
+    const m = marker(ll, k + 1, k + 1 === +v[1] ? "target" : "", i === selected);
+
+    if (i === selected) {
+      m.on("dragend", () => {
+        v.splice(2 + k * 4, 4, ...polyFields(m.getLatLng()));
+        change();
+      });
+      m.on("click", () => {
+        v[1] = String(k + 1);
+        change();
+      });
+    }
+    m.addTo(pathLayer);
+  });
 }
 
 function marker(latlng, text, cls, draggable) {
@@ -533,11 +698,14 @@ function drawPoints() {
   });
 
   if (coords.length > 1) L.polyline(coords, { color: "#4cc9f0", weight: 2, opacity: .8, dashArray: "4 4" }).addTo(pathLayer);
+  rows.forEach((row, i) => { if (!row.raw && row.cmd === 7) drawPolygon(row, i); });
+  rows.forEach((row, i) => { if (!row.raw && row.cmd === 8) drawLine(row, i); });
   if (point.lat) marker(L.latLng(degrees(point.lat, point.ns), degrees(point.lon, point.ew)), "", "pending", false).addTo(pathLayer);
+  pick.pts.forEach((ll, i) => marker(ll, i + 1, "pending", false).addTo(pathLayer));
   mow.pts.forEach((ll, i) => marker(ll, "p" + (i + 1), "pending", false).addTo(pathLayer));
 }
 
-map.on("click", e => mow.picking ? mowClick(e.latlng) : pointFields(e.latlng));
+map.on("click", e => mow.picking ? mowClick(e.latlng) : pick.cmd ? pickClick(e.latlng) : pointFields(e.latlng));
 
 /* ----------------------------------------------------------- mow area -- */
 /* Four corners clicked in order round the area. The mower drives p1-p2, steps
@@ -610,12 +778,12 @@ function mowClick(latlng) {
   }
 
   const made = mowAreaRows(mow.pts);
-  const at = selected < 0 ? rows.length : selected + 1;
+  const at = selected < 0 ? rows.length : selected;
 
   mow.picking = false;
   mow.pts = [];
   rows.splice(at, 0, ...made);
-  selected = at + made.length - 1;
+  if (selected >= 0) selected += made.length;
   say(`Mow area: ${made.length} rows added`);
   change();
 }
@@ -636,6 +804,7 @@ function buildMowArea() {
     + `<div class="row"><button id="mowPick">Pick 4 corners</button></div>`;
   document.getElementById("commands").appendChild(block);
   document.getElementById("mowPick").addEventListener("click", mowStart);
+  block.querySelector("h2").addEventListener("click", () => openBlock(block));
 }
 
 /* --------------------------------------------------------------- file -- */
@@ -646,6 +815,7 @@ const WORKORDER_DIR = "workorder/";
 const HEADER = "#version 1\n";
 
 const loadDialog = document.getElementById("loadDialog");
+const delDialog = document.getElementById("delDialog");
 
 function setFile(name, text) {
   rows = [];
@@ -659,8 +829,12 @@ function setFile(name, text) {
     const f = s.split(",");
     const cmd = byId(+f[0]);
 
+    const want = cmd && cmd.poly ? 7 + 4 * (+f[6] || 0)
+               : cmd && cmd.line ? 3 + 4 * (+f[1] || 0)
+               : cmd && cmd.fields.length + 1;
+
     if (!s || s.startsWith("#")) continue;
-    if (cmd && f.length === cmd.fields.length + 1) rows.push({ cmd: cmd.id, values: f.slice(1) });
+    if (cmd && f.length === want) rows.push({ cmd: cmd.id, values: f.slice(1) });
     else rows.push({ raw: s });
   }
   renderRows();
@@ -726,6 +900,56 @@ async function loadFile(name) {
   }
 }
 
+/* Deleting is the one thing here that cannot be undone, so the names go past
+   the user once more before the requests are sent. */
+function delItem(name) {
+  const li = document.createElement("li");
+
+  li.innerHTML = `<label><input type="checkbox" value="${name}"><span></span></label>`;
+  li.querySelector("span").textContent = name;
+  return li;
+}
+
+async function delOpen() {
+  const list = document.getElementById("delList");
+
+  list.replaceChildren(loadItem("Listing …"));
+  delDialog.showModal();
+
+  const names = await fileNames();
+  if (!delDialog.open) return;                 /* cancelled while listing */
+
+  list.replaceChildren(...(names.length ? names.map(delItem)
+                                        : [loadItem("No .wo files in " + WORKORDER_DIR)]));
+  document.getElementById("delGo").disabled = !names.length;
+}
+
+async function delFiles() {
+  const names = [...document.querySelectorAll("#delList input:checked")].map(c => c.value);
+  let done = 0;
+
+  if (!names.length) { say("Tick the workorders to delete", true); return; }
+  if (!confirm("Delete " + names.join(", ") + "?")) return;
+
+  delDialog.close();
+
+  for (const name of names) {
+    try {
+      const res = await fetch(WORKORDER_DIR + name + ".wo", { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    } catch (e) {
+      say(`Cannot delete ${name}: ${e.message} — the server must allow DELETE in ${WORKORDER_DIR}`, true);
+      break;
+    }
+    /* The open file is now only in this browser: it needs a name again. */
+    if (name === fileName) { fileName = ""; dirty = true; }
+    done++;
+  }
+
+  if (done === names.length) say(done + " workorder(s) deleted");
+  renderRows();
+}
+
 async function saveFile(name) {
   try {
     const res = await fetch(WORKORDER_DIR + name + ".wo", {
@@ -781,6 +1005,12 @@ document.getElementById("save").addEventListener("click", () => fileName ? saveF
 document.getElementById("saveas").addEventListener("click", saveAs);
 
 document.getElementById("download").addEventListener("click", downloadFile);
+
+document.getElementById("del").addEventListener("click", delOpen);
+
+document.getElementById("delGo").addEventListener("click", delFiles);
+
+document.getElementById("delCancel").addEventListener("click", () => delDialog.close());
 
 document.getElementById("delete").addEventListener("click", deleteRow);
 

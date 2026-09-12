@@ -16,7 +16,15 @@
     width: 300px; flex: none; display: flex; flex-direction: column;
     background: #181b1f; border-right: 1px solid #2b3238; overflow: hidden;
   }
-  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+  #sidebar.collapsed { display: none; }
+
+  /* A handle on the map edge, clear of the zoom buttons and the scale bar. */
+  #collapse {
+    position: absolute; left: 0; top: 50%; transform: translateY(-50%); z-index: 500;
+    width: 24px; height: 96px; padding: 0; font-size: 20px; line-height: 1;
+    border-left: none; border-radius: 0 6px 6px 0;
+  }
   #map { flex: 1; min-height: 0; background: #14171a; }
 
   /* ---- graph strip along the bottom quarter of the window ---- */
@@ -149,6 +157,7 @@
 </dialog>
 
 <div id="main">
+  <button id="collapse" title="Hide the sidebar">&lsaquo;</button>
   <div id="map"></div>
   <div id="chart">
     <div id="chartHead">
@@ -190,7 +199,8 @@ function saveState() {
     logs: TRACKS.filter(t => t.on && !isFile(t.key)).map(t => t.key),
     active: activeKey && !isFile(activeKey) ? activeKey : null,
     colorBy: document.getElementById("colorBy").value,
-    channel: document.getElementById("channel").value
+    channel: document.getElementById("channel").value,
+    collapsed: document.getElementById("sidebar").classList.contains("collapsed")
   };
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch { /* blocked or full */ }
 }
@@ -300,8 +310,19 @@ function parseCsv(text) {
 
 const TRACK_COLORS = ["#4cc9f0", "#f9c74f", "#90be6d", "#f8961e", "#b5179e",
                       "#43aa8b", "#f94144", "#4895ef"];
-const STATE_COLORS = ["#8d99ae", "#4cc9f0", "#4895ef", "#43aa8b", "#90be6d",
-                      "#f9c74f", "#f8961e", "#f3722c", "#f94144", "#b5179e"];
+/* The firmware also reports states of its own past this list - those are left
+   as the bare number rather than guessed at. */
+const STATE_NAMES = { 0: "idle", 1: "debug", 2: "menu", 3: "mow", 4: "startcharge", 5: "charging",
+                      6: "wait_for_schedule", 7: "stopped", 8: "stopped_2",
+                      32: "rc_stopped", 33: "rc_running", 34: "rc_turning", 35: "rc_normal_mow",
+                      36: "rc_finding_charge", 37: "rc_charging" };
+
+const stateName = s => s == null ? "?" : (STATE_NAMES[s] || String(s));
+
+const STATE_COLORS = { 0: "#8d99ae", 1: "#4cc9f0", 2: "#4895ef", 3: "#43aa8b", 4: "#90be6d",
+                       5: "#f9c74f", 6: "#f8961e", 7: "#f3722c", 8: "#f94144", 9: "#b5179e",
+                       32: "#f3722c", 33: "#4cc9f0", 34: "#f9c74f", 35: "#43aa8b",
+                       36: "#b5179e", 37: "#90be6d" };
 const FIX_COLORS = { 1: "#f9c74f", 2: "#90be6d", 3: "#43aa8b",
                      4: "#4cc9f0", 5: "#4895ef", 6: "#f94144" };
 const GREY = "#8d99ae";
@@ -361,7 +382,7 @@ function legendFor(mode, tracks) {
     case "track":     return keys(tracks.map(t => [t.color, t.name]));
     case "state": {
       const seen = [...new Set(rows.map(r => r.state).filter(s => s != null))].sort((a, b) => a - b);
-      return keys(seen.map(s => [STATE_COLORS[s] || GREY, "state " + s]));
+      return keys(seen.map(s => [STATE_COLORS[s] || GREY, stateName(s)]));
     }
     case "battery":   return gradient(HEAT, "0 %", "100 %");
     case "near_wire": return keys([["#43aa8b", "far from wire"], ["#f94144", "near wire"]]);
@@ -451,7 +472,7 @@ function popupHtml(r, track) {
     `<b>${track.name}</b>`,
     stamp(r),
     `${r.lat.toFixed(7)}, ${r.lon.toFixed(7)}`,
-    `state ${r.state ?? "?"} &middot; battery ${r.soc ?? "?"} %`,
+    `${stateName(r.state)} &middot; battery ${r.soc ?? "?"} %`,
     `fix ${r.fix_quality ?? "?"} / mode ${r.fix_mode ?? "?"} &middot; ${r.sats ?? "?"} sats` +
       ` &middot; HDOP ${r.hdop ?? "?"}`,
     `wire L/R ${r.wire_left ?? "?"}/${r.wire_right ?? "?"} &middot; near ${r.near_wire ?? "?"}` +
@@ -604,7 +625,7 @@ function updateCursor(track, i) {
   const line = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
   document.getElementById("cursor").innerHTML =
     line("Time", stamp(r)) +
-    line("State / SoC", `${r.state ?? "?"} / ${r.soc ?? "?"} %`) +
+    line("State / SoC", `${stateName(r.state)} / ${r.soc ?? "?"} %`) +
     line("Sats / HDOP", `${r.sats ?? "?"} / ${r.hdop ?? "?"}`) +
     line("Wifi", r.wifi == null ? "?" : `${r.wifi} dBm`) +
     (r.volt == null && r.current == null ? ""
@@ -622,7 +643,7 @@ const CHANNELS = {
   wifi:  { label: "Wifi signal", unit: " dBm", lo: -100, hi: 0, get: r => r.wifi },
   volt:    { label: "Battery voltage", unit: " V", get: r => r.volt },
   current: { label: "Charge current", unit: " A", lo: 0, get: r => r.current },
-  state: { label: "State",       unit: "",   lo: 0, tick: 1, get: r => r.state }
+  state: { label: "State",       unit: "",   lo: 0, tick: 1, get: r => r.state, text: stateName }
 };
 
 /* r leaves room for half of the last hh:mm:ss label, which is centred on x1. */
@@ -714,15 +735,22 @@ function drawChart() {
   }
   if (data.length < 2) { note(`No ${ch.label.toLowerCase()} samples in this log`); return; }
 
+  /* A named channel has no scale of its own: one step per state the log holds,
+     so rc states in the thirties do not pile up above an unused 0-31. */
+  const levels = ch.text ? [...new Set(data.map(d => d.v))].sort((a, b) => a - b) : null;
+  const at = v => levels ? levels.indexOf(v) : v;
+
   const t0 = data[0].t, t1 = data[data.length - 1].t;
-  let lo = ch.lo != null ? ch.lo : Math.min(...data.map(d => d.v));
-  let hi = ch.hi != null ? ch.hi : Math.max(...data.map(d => d.v));
-  if (ch.hi == null) hi = Math.max(hi, lo + 1) * 1.05;
+  let lo = levels ? -0.3 : ch.lo != null ? ch.lo : Math.min(...data.map(d => d.v));
+  let hi = levels ? levels.length - 0.7 : ch.hi != null ? ch.hi : Math.max(...data.map(d => d.v));
+  if (!levels && ch.hi == null) hi = Math.max(hi, lo + 1) * 1.05;
   if (hi <= lo) hi = lo + 1;
 
-  const x0 = PAD.l, x1 = w - PAD.r, y0 = PAD.t, y1 = h - PAD.b;
+  /* State names need more room on the left than a two digit number does. */
+  const padl = ch.text ? 108 : PAD.l;
+  const x0 = padl, x1 = w - PAD.r, y0 = PAD.t, y1 = h - PAD.b;
   const px = t => x0 + (t1 > t0 ? (t - t0) / (t1 - t0) : 0.5) * (x1 - x0);
-  const py = v => y1 - (v - lo) / (hi - lo) * (y1 - y0);
+  const py = v => y1 - (at(v) - lo) / (hi - lo) * (y1 - y0);
   chartGeom = { x0, x1, y0, y1, t0, t1 };
 
   /* grid + labels */
@@ -730,11 +758,21 @@ function drawChart() {
   ctx.strokeStyle = "#2b3238"; ctx.lineWidth = 1;
   ctx.fillStyle = "#78828c";
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  /* A named channel is only ever at the values the log holds, so those are the
+     gridlines - stepping one by one up to a state like 34 labels nothing. */
   const step = ch.tick || niceStep((hi - lo) / 5);
-  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) {
+  const ticks = [];
+
+  if (levels) {
+    ticks.push(...levels);
+  } else {
+    for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) ticks.push(v);
+  }
+
+  for (const v of ticks) {
     const y = Math.round(py(v)) + 0.5;
     ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
-    ctx.fillText(String(+v.toFixed(3)) + ch.unit, x0 - 5, y);
+    ctx.fillText(ch.text ? ch.text(v) : String(+v.toFixed(3)) + ch.unit, x0 - 5, y);
   }
   ctx.textAlign = "center"; ctx.textBaseline = "top";
   const span = t1 - t0;
@@ -775,7 +813,7 @@ function drawChart() {
       ctx.fillStyle = "#4cc9f0";
       ctx.beginPath(); ctx.arc(x, py(v), 3, 0, Math.PI * 2); ctx.fill();
     }
-    valueEl.innerHTML = `${clock(cur.t, span)} &middot; <b>${v == null ? "?" : v}${ch.unit}</b>`;
+    valueEl.innerHTML = `${clock(cur.t, span)} &middot; <b>${v == null ? "?" : ch.text ? ch.text(v) : v + ch.unit}</b>`;
   }
 
   /* the range being dragged out right now */
@@ -1249,7 +1287,26 @@ async function woOpen() {
 
 woButton();
 
+/* ------------------------------------------------------------- sidebar -- */
+/* Hiding the list gives the map and the graph the whole window; Leaflet has to
+   be told the map changed size. */
+
+function collapseSidebar(on) {
+  const b = document.getElementById("collapse");
+
+  document.getElementById("sidebar").classList.toggle("collapsed", on);
+  b.innerHTML = on ? "&rsaquo;" : "&lsaquo;";
+  b.title = on ? "Show the sidebar" : "Hide the sidebar";
+  map.invalidateSize();
+  drawChart();
+}
+
 /* --------------------------------------------------------------- events -- */
+
+document.getElementById("collapse").addEventListener("click", () => {
+  collapseSidebar(!document.getElementById("sidebar").classList.contains("collapsed"));
+  saveState();
+});
 
 document.getElementById("workorder").addEventListener("click", woOpen);
 
@@ -1302,6 +1359,7 @@ document.addEventListener("keydown", e => {
    one in the list. Remembered logs that have since been rotated away are
    dropped rather than reported. */
 
+if (STATE.collapsed) collapseSidebar(true);
 if (STATE.colorBy) document.getElementById("colorBy").value = STATE.colorBy;
 if (STATE.channel) document.getElementById("channel").value = STATE.channel;
 

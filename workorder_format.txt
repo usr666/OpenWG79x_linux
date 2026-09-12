@@ -11,14 +11,14 @@ A # row after #version naming the columns of each fieldtype the file uses is rec
 
 First field is cmd_id, a decimal number 1-255 that describes command id for this row
 
-cmd_id 1 - Run
+Run
 cmd_id                 1
 left_speed             left wheel speed in percent, -100..100 (-100 = full reverse, 100 = full forward)
 right_speed            right wheel speed in percent, -100..100
 disc_speed             disc speed in percent, -100..100
 force_run              1 = do not stop when hitting obstacles
 
-cmd_id 2 - Turn
+Turn
 cmd_id                 2
 wheel_speed            nominal wheel speed in percent, -100..100
 turn_angle             angle to turn in degrees, 0..255
@@ -26,13 +26,45 @@ turn_dir               direction to turn, 0 = left, 1 = right
 disc_speed             disc speed in percent, -100..100
 force_run              1 = do not stop when hitting obstacles
 
-cmd_id 3 - Wait 
+Wait 
 cmd_id                 3
 event                  0 = no event (only timeout), 1=turn complete, 2=rtkfloat or rtkfix, 3=rtkfix
 timeout                timeout in seconds, 0-255
 
-cmd_id 4 - Run to point
+Run to point
 cmd_id                 4
+latitude_nmea          verbatim NMEA ddmm.mmmmm; deg = floor(v/100), decimal = deg + (v - deg*100)/60
+latitude_hemisphere    N or S; S is negative
+longitude_nmea         verbatim NMEA dddmm.mmmmm; converted as latitude_nmea
+longitude_hemisphere   E or W; W is negative
+
+Mow
+cmd_id                 5
+mowtime                Number of seconds to mow, max 65535
+
+Go to charge
+cmd_id                 6
+
+Mow within polygon
+cmd_id                 7
+mowtime                Number of seconds to mow, max 65535
+center_lat             verbatim NMEA ddmm.mmmmm; the point to turn towards when outside the polygon
+center_lat_h           N or S; S is negative
+center_lon             verbatim NMEA dddmm.mmmmm; converted as center_lat
+center_lon_h           E or W; W is negative
+numpoints              Number of points in polygon, 3-32
+These 4 parameters are repeated for numpoints:
+latitude_nmea          verbatim NMEA ddmm.mmmmm; deg = floor(v/100), decimal = deg + (v - deg*100)/60
+latitude_hemisphere    N or S; S is negative
+longitude_nmea         verbatim NMEA dddmm.mmmmm; converted as latitude_nmea
+longitude_hemisphere   E or W; W is negative
+
+Follow line
+Mower goes to the nearest point on line. It then follows the line until it arrives at the targetpoint.
+cmd_id                 8
+numpoints              Number of points in line, 2-32
+targetpoint            Index of point that is the targest, start count on 1
+These 4 parameters are repeated for numpoints:
 latitude_nmea          verbatim NMEA ddmm.mmmmm; deg = floor(v/100), decimal = deg + (v - deg*100)/60
 latitude_hemisphere    N or S; S is negative
 longitude_nmea         verbatim NMEA dddmm.mmmmm; converted as latitude_nmea

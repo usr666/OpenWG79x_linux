@@ -9,7 +9,7 @@
 #include <time.h>
 #include "mowercontrol.h"
 
-#define GGA_HISTORY 20
+#define GGA_HISTORY 64
 #define WO_LINE_MAX 65536
 #define WORKORDER_DIR "workorder"
 #define WORKORDER_EXT ".wo"
@@ -23,17 +23,21 @@
 #define MM_PER_DEGREE 111320000.0
 #define AT_POINT_MM 500
 #define DIRECTION_SPEED 50
-#define DIRECTION_MEASURE_MS 3000
-#define MIN_MEASURE_MM 1000		/* a shorter baseline makes the bearing noise */
+#define MIN_HEADING_MM 1000
 #define RUN_SPEED 50
 #define TARGET_BEHIND_DEG 90.0
 #define OFF_COURSE_DEG 10.0
-#define TURN_START_MS 1000		/* the mower has this long to report the turn */
+#define TURN_START_MS 1000
 #define COLLISION_SPEED 30
 #define COLLISION_REVERSE_MS 1000
 #define COLLISION_FORWARD_MS 1000
 #define COLLISION_TURN_DEG 90
 #define COLLISION_RETRIES 5
+#define POLYGON_MAX_POINTS 32
+#define MOW_RESUME_MS 5000
+#define LINE_MAX_POINTS 32
+#define DIRECTION_PRINT_MS 1000
+#define DISC_SPEED 50
 
 typedef enum {
 	mctr_idle = 0,
@@ -47,26 +51,42 @@ typedef enum {
 	mctr_collision_backoff,
 	mctr_collision_turn_away,
 	mctr_collision_forward,
-	mctr_collision_turn_back
+	mctr_collision_turn_back,
+	mctr_mow,
+	mctr_mow_polygon,
+	mctr_mow_outside_run,
+	mctr_mow_outside_turn,
+	mctr_mow_check_wire
 }mctrstate_t;
 
 static mctrstate_t mctrstate = mctr_idle;
 static mctrstate_t mctrstate_after_collision = mctr_idle;
 static bool collision_turn_left;	/* which way the collision detour goes */
 static int collision_retries;		/* detours since the last one that worked */
+static point_t polygon[POLYGON_MAX_POINTS];
+static int polygon_points;
+static point_t mow_center;
+static long long mow_deadline;
 static FILE *wo_file;
 static char wo_line[WO_LINE_MAX];
 static int  wo_cmd_id;
 static int  wo_wait_event;
 static point_t wo_target;
-static bool direction_known;
-static bool turn_started;		/* the mower has reported the ordered turn running */
-static double direction;		/* degrees from north, clockwise */
-static point_t state_start_point;	/* position when the current state was entered */
-static long long state_deadline;	/* monotonic milliseconds */
+static point_t line_points[LINE_MAX_POINTS];
+static int line_count;
+static int line_target;
+static int line_step;
+static int line_dir;
+static int disc_speed;
+static bool turn_started;
+static double direction;
+static long long direction_print_deadline;
+static long long state_deadline;
 static msg_mower_status_t status;
-static char gga_log[GGA_HISTORY][GPS_LINE_MAX];
-static int gga_log_pos = -1;		/* last inserted slot */
+static point_t gga_log[GGA_HISTORY];
+static int gga_log_pos;
+static int gga_log_count;
+static int gga_last_quality;
 
 /* Not stepped by ntp, unlike time() */
 static long long now_ms(void)
@@ -137,7 +157,7 @@ static void tcp_row(const char *row)
 			break;
 		case 2:
 			printf("tcp abort\n");
-			mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4); // stop mower
+			mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4);
 			mctrstate = mctr_idle;
 			break;
 		default:
@@ -167,18 +187,30 @@ void mowercontrol_input_mowercom(uint8_t msgid, const uint8_t *msgbuf)
 {
 	if (msgid == MSG_MOWER_STATUS) {
 		memcpy(&status, msgbuf, sizeof(status));
+		if (status.left_wheel_speed != status.right_wheel_speed || status.left_wheel_speed < 0) {
+			gga_log_count = 0;
+		}
 		printf("status: state %u wheels %d/%d bump %u lift %u wire %u%u%u soc %u\n", status.state, status.left_wheel_speed, status.right_wheel_speed, (status.sensor_status >> 0) & 1, (status.sensor_status >> 1) & 1, (status.wire_sensor_status >> 0) & 1, (status.wire_sensor_status >> 1) & 1, (status.wire_sensor_status >> 2) & 1, status.battery_soc);
 	}
 }
 
 void mowercontrol_input_gps(gps_recordtype type, const char *line)
 {
+	nmea_gga_t gga;
+
 	if (type != gps_gga) {		/* rmc not used yet */
 		return;
 	}
+	if (!parse_gga(line, &gga)) {
+		return;
+	}
 
+	gga_last_quality = atoi(gga.quality);
 	gga_log_pos = (gga_log_pos + 1) % GGA_HISTORY;
-	strcpy(gga_log[gga_log_pos], line);
+	gga_log[gga_log_pos] = nmea_to_point(gga.lat, gga.ns, gga.lon, gga.ew);
+	if (gga_log_count < GGA_HISTORY) {
+		gga_log_count++;
+	}
 }
 
 /* cmd_id 1: left_speed, right_speed, disc_speed, force_run */
@@ -188,7 +220,6 @@ static void wo_cmd_run(void)
 
 	if (sscanf(wo_line, "%*d,%hhd,%hhd,%hhd,%hhd", &p[0], &p[1], &p[2], &p[3]) == 4) {
 		printf("cmd run: left %d right %d disc %d force %d\n", p[0], p[1], p[2], p[3]);
-		direction_known = false;	/* the mower moves without us tracking the heading */
 		mowercom_send(MSG_REMOTE_CONTROL_RUN, p, sizeof(p));
 	}
 }
@@ -209,7 +240,6 @@ static void wo_cmd_turn(void)
 	p[3] = disc;
 	p[4] = force;
 	printf("cmd turn: turn ordered %d deg %s at speed %d, disc %d force %d\n", angle, dir ? "right" : "left", speed, disc, force);
-	direction_known = false;	/* the mower turns without us tracking the heading */
 	turn_started = false;		/* so a wait for this turn can't resolve on a stale flag */
 	mowercom_send(MSG_REMOTE_CONTROL_TURN, p, sizeof(p));
 }
@@ -229,6 +259,20 @@ static void wo_cmd_wait(void)
 	mctrstate = mctr_wait;
 }
 
+static void wo_cmd_mow(void)
+{
+	int mowtime;
+
+	if (sscanf(wo_line, "%*d,%d", &mowtime) != 1) {
+		return;
+	}
+
+	mow_deadline = now_ms() + (long long)mowtime * 1000;
+	printf("cmd mow: %d s\n", mowtime);
+	mowercom_send(MSG_REMOTE_CONTROL_MOW, NULL, 0);
+	mctrstate = mctr_mow;
+}
+
 /* cmd_id 4: latitude_nmea, latitude_hemisphere, longitude_nmea, longitude_hemisphere */
 static void wo_cmd_run_to_point(void)
 {
@@ -239,28 +283,90 @@ static void wo_cmd_run_to_point(void)
 	}
 
 	wo_target = nmea_to_point(lat, ns, lon, ew);
+	line_count = 0;
+	disc_speed = 0;
 	printf("cmd run to point: %.7f %.7f\n", wo_target.lat, wo_target.lon);
 	mctrstate = mctr_run_to_point_start;
 }
 
-static int gga_quality(void)
+static void wo_cmd_mow_polygon(void)
 {
-	nmea_gga_t gga;
+	const char *field = wo_line;
+	char lat[16], ns[2], lon[16], ew[2];
+	int mowtime, numpoints, i, j;
 
-	if (!parse_gga(gga_log[gga_log_pos], &gga)) {
-		return 0;
+	if (sscanf(wo_line, "%*d,%d", &mowtime) != 1) {
+		return;
 	}
 
-	return atoi(gga.quality);
+	for (i = 0; i < 2; i++) {		/* step over cmd_id and mowtime */
+		field = field ? strchr(field, ',') : NULL;
+		if (field) {
+			field++;
+		}
+	}
+
+	if (!field || sscanf(field, "%15[^,],%1[^,],%15[^,],%1[^,\r\n]", lat, ns, lon, ew) != 4) {
+		printf("cmd mow polygon: no centre point\n");
+		return;
+	}
+	mow_center = nmea_to_point(lat, ns, lon, ew);
+
+	for (i = 0; i < 4; i++) {		/* step over the centre point */
+		field = field ? strchr(field, ',') : NULL;
+		if (field) {
+			field++;
+		}
+	}
+
+	if (!field || sscanf(field, "%d", &numpoints) != 1) {
+		printf("cmd mow polygon: no corner count\n");
+		return;
+	}
+	if (numpoints < 3 || numpoints > POLYGON_MAX_POINTS) {
+		printf("cmd mow polygon: %d corners, must be 3..%d\n", numpoints, POLYGON_MAX_POINTS);
+		return;
+	}
+
+	field = strchr(field, ',');		/* step over numpoints */
+	if (field) {
+		field++;
+	}
+
+	for (i = 0; i < numpoints; i++) {
+		if (!field || sscanf(field, "%15[^,],%1[^,],%15[^,],%1[^,\r\n]", lat, ns, lon, ew) != 4) {
+			printf("cmd mow polygon: corner %d missing\n", i + 1);
+			return;
+		}
+		polygon[i] = nmea_to_point(lat, ns, lon, ew);
+		for (j = 0; j < 4; j++) {
+			field = field ? strchr(field, ',') : NULL;
+			if (field) {
+				field++;
+			}
+		}
+	}
+
+	polygon_points = numpoints;
+	mow_deadline = now_ms() + (long long)mowtime * 1000;
+	printf("cmd mow polygon: %d s, centre %.7f %.7f, %d corners\n", mowtime, mow_center.lat, mow_center.lon, numpoints);
+	mowercom_send(MSG_REMOTE_CONTROL_MOW, NULL, 0);
+	state_deadline = now_ms() + MOW_RESUME_MS;
+	mctrstate = mctr_mow_polygon;
 }
 
-static point_t current_point(void)
+static bool point_in_polygon(const point_t *p)
 {
-	nmea_gga_t gga;
+	bool inside = false;
+	int i, j;
 
-	parse_gga(gga_log[gga_log_pos], &gga);
+	for (i = 0, j = polygon_points - 1; i < polygon_points; j = i++) {
+		if ((polygon[i].lat > p->lat) != (polygon[j].lat > p->lat) && p->lon < (polygon[j].lon - polygon[i].lon) * (p->lat - polygon[i].lat) / (polygon[j].lat - polygon[i].lat) + polygon[i].lon) {
+			inside = !inside;
+		}
+	}
 
-	return nmea_to_point(gga.lat, gga.ns, gga.lon, gga.ew);
+	return inside;
 }
 
 /* Degrees from north, clockwise */
@@ -285,10 +391,90 @@ static int distance_between_points(const point_t *from, const point_t *to)
 	return (int)sqrt(dlat * dlat + dlon * dlon);
 }
 
+/* cmd_id 8: numpoints, targetpoint, then 4 fields per point */
+static void wo_cmd_follow_line(void)
+{
+	const char *field = wo_line;
+	char lat[16], ns[2], lon[16], ew[2];
+	point_t pos;
+	int numpoints, target, i, j, dist, bestdist;
+
+	if (sscanf(wo_line, "%*d,%d,%d", &numpoints, &target) != 2) {
+		printf("cmd follow line: no point count\n");
+		return;
+	}
+	if (numpoints < 2 || numpoints > LINE_MAX_POINTS) {
+		printf("cmd follow line: %d points, must be 2..%d\n", numpoints, LINE_MAX_POINTS);
+		return;
+	}
+	if (target < 1 || target > numpoints) {
+		printf("cmd follow line: target %d, must be 1..%d\n", target, numpoints);
+		return;
+	}
+
+	for (i = 0; i < 3; i++) {		/* step over cmd_id, numpoints and targetpoint */
+		field = field ? strchr(field, ',') : NULL;
+		if (field) {
+			field++;
+		}
+	}
+
+	for (i = 0; i < numpoints; i++) {
+		if (!field || sscanf(field, "%15[^,],%1[^,],%15[^,],%1[^,\r\n]", lat, ns, lon, ew) != 4) {
+			printf("cmd follow line: point %d missing\n", i + 1);
+			return;
+		}
+		line_points[i] = nmea_to_point(lat, ns, lon, ew);
+		for (j = 0; j < 4; j++) {
+			field = field ? strchr(field, ',') : NULL;
+			if (field) {
+				field++;
+			}
+		}
+	}
+
+	pos = gga_log[gga_log_pos];
+	line_step = 0;
+	bestdist = distance_between_points(&pos, &line_points[0]);
+	for (i = 1; i < numpoints; i++) {
+		dist = distance_between_points(&pos, &line_points[i]);
+		if (dist < bestdist) {
+			line_step = i;
+			bestdist = dist;
+		}
+	}
+
+	line_count = numpoints;
+	line_target = target - 1;
+	line_dir = (line_target < line_step) ? -1 : 1;
+	disc_speed = DISC_SPEED;
+	printf("cmd follow line: %d points, nearest is %d at %d mm, target is %d\n", numpoints, line_step + 1, bestdist, target);
+	mctrstate = mctr_read_wo_line;
+}
+
+static bool calculate_direction(void)
+{
+	point_t now = gga_log[gga_log_pos];
+	int i, pos, distance;
+
+	for (i = 20; i < gga_log_count; i++) { // Require at least 20 points to calculate direction
+		pos = (gga_log_pos - i + GGA_HISTORY) % GGA_HISTORY;
+		distance=distance_between_points(&gga_log[pos], &now);
+		if (distance >= MIN_HEADING_MM) {
+			direction = bearing_between_points(&gga_log[pos], &now);
+			if (now_ms() >= direction_print_deadline) {
+				printf("direction %.0f over %d mm, %d samples\n", direction, distance, i);
+				direction_print_deadline = now_ms() + DIRECTION_PRINT_MS;
+			}
+			return true;
+		}
+	}
+
+	return false;
+}
+
 static bool is_wait_condition_done(void)
 {
-	int quality;
-
 	switch(wo_wait_event) {
 		case 1:
 			if (status.state == STATE_RC_TURNING) {
@@ -297,10 +483,9 @@ static bool is_wait_condition_done(void)
 			}
 			return turn_started;
 		case 2:
-			quality = gga_quality();
-			return quality == FIX_RTK_FIXED || quality == FIX_RTK_FLOAT;
+			return gga_last_quality == FIX_RTK_FIXED || gga_last_quality == FIX_RTK_FLOAT;
 		case 3:
-			return gga_quality() == FIX_RTK_FIXED;
+			return gga_last_quality == FIX_RTK_FIXED;
 	}
 	return false;
 }
@@ -324,7 +509,7 @@ static bool collision_handling(mctrstate_t resumestate) {
 	}
 	if (++collision_retries > COLLISION_RETRIES) {
 		printf("collision: still stuck after %d detours, giving up\n", COLLISION_RETRIES);
-		mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4); // stop mower
+		mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4);
 		mctrstate = mctr_idle;
 		return true;
 	}
@@ -339,6 +524,20 @@ static bool collision_handling(mctrstate_t resumestate) {
 	return true;
 }
 
+static void turn_towards_center(void)
+{
+	point_t pos;
+	double turn;
+
+	pos = gga_log[gga_log_pos];
+	turn = fmod(bearing_between_points(&pos, &mow_center) - direction + 540.0, 360.0) - 180.0;
+	printf("mow polygon: heading %.0f, turn ordered %d deg %s towards the centre\n", direction, (int)fabs(turn), turn < 0 ? "left" : "right");
+	mowercom_send(MSG_REMOTE_CONTROL_TURN, (uint8_t[]){ 0, (uint8_t)fabs(turn), turn < 0 ? 0 : 1, 0, 0 }, 5);
+	turn_started = false;
+	state_deadline = now_ms() + TURN_START_MS;
+	direction = bearing_between_points(&pos, &mow_center);
+	mctrstate = mctr_mow_outside_turn;
+}
 
 void mowercontrol_execute()
 {
@@ -355,10 +554,20 @@ void mowercontrol_execute()
 				printf("Closing workorder file\n");
 				fclose(wo_file);
 				wo_file = NULL;
-				direction_known = false;
 			}
 			break;
 		case mctr_read_wo_line:
+			if (line_count > 0) {
+				wo_target = line_points[line_step];
+				printf("follow line: point %d of %d\n", line_step + 1, line_count);
+				if (line_step == line_target) {
+					line_count = 0;
+				} else {
+					line_step += line_dir;
+				}
+				mctrstate = mctr_run_to_point_start;
+				break;
+			}
 			if (!fgets(wo_line, sizeof(wo_line), wo_file)) {
 				printf("workorder done\n");
 				fclose(wo_file);
@@ -381,6 +590,19 @@ void mowercontrol_execute()
 				case 4:
 					wo_cmd_run_to_point();
 					break;
+				case 5:
+					wo_cmd_mow();
+					break;
+				case 6:
+					printf("cmd go to charge\n");
+					mowercom_send(MSG_REMOTE_CONTROL_FIND_CHARGER, NULL, 0);
+					break;
+				case 7:
+					wo_cmd_mow_polygon();
+					break;
+				case 8:
+					wo_cmd_follow_line();
+					break;
 			}
 			break;
 		case mctr_wait:
@@ -390,16 +612,16 @@ void mowercontrol_execute()
 			}
 			break;
 		case mctr_run_to_point_start:
-			pos = current_point();
+			pos = gga_log[gga_log_pos];
 			if (distance_between_points(&pos, &wo_target) < AT_POINT_MM) {
 				printf("rtp: already at point\n");
 				mctrstate = mctr_read_wo_line;
-			} else if (!direction_known) {
+			} else if (!calculate_direction()) {
 				mctrstate = mctr_rtp_start_determine_direction;
-			} else {	/* turn on the spot until we point at the target */
+			} else {
 				turn = fmod(bearing_between_points(&pos, &wo_target) - direction + 540.0, 360.0) - 180.0;
 				printf("rtp: %d mm to go, heading %.0f, turn ordered %d deg %s at speed 0\n", distance_between_points(&pos, &wo_target), direction, (int)fabs(turn), turn < 0 ? "left" : "right");
-				mowercom_send(MSG_REMOTE_CONTROL_TURN, (uint8_t[]){ 0, (uint8_t)fabs(turn), turn < 0 ? 0 : 1, 0, 0 }, 5);
+				mowercom_send(MSG_REMOTE_CONTROL_TURN, (uint8_t[]){ 0, (uint8_t)fabs(turn), turn < 0 ? 0 : 1, disc_speed, 0 }, 5);
 				turn_started = false;
 				state_deadline = now_ms() + TURN_START_MS;
 				direction = bearing_between_points(&pos, &wo_target);
@@ -407,39 +629,33 @@ void mowercontrol_execute()
 			}
 			break;
 		case mctr_rtp_start_determine_direction:
-			pos = current_point();
-			printf("rtp: %d mm to go, measuring direction\n", distance_between_points(&pos, &wo_target));
-			mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ DIRECTION_SPEED, DIRECTION_SPEED, 0, 0 }, 4);
-			state_start_point = pos;
-			state_deadline = now_ms() + DIRECTION_MEASURE_MS;
+			pos = gga_log[gga_log_pos];
+			printf("rtp: %d mm to go, no heading, running straight to get one\n", distance_between_points(&pos, &wo_target));
+			mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ DIRECTION_SPEED, DIRECTION_SPEED, disc_speed, 0 }, 4);
 			mctrstate = mctr_rtp_determine_direction;
 			break;
 		case mctr_rtp_determine_direction:
 			if(collision_handling(mctr_rtp_start_determine_direction)) {
 				break;
 			}
-			pos = current_point();
+			pos = gga_log[gga_log_pos];
 			if (distance_between_points(&pos, &wo_target) < AT_POINT_MM) {
 				printf("rtp: at point, %d mm to go\n", distance_between_points(&pos, &wo_target));
-				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4); // stop mower
+				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4);
 				mctrstate = mctr_read_wo_line;
-			} else if (now_ms() >= state_deadline && distance_between_points(&state_start_point, &pos) >= MIN_MEASURE_MM) {
-				direction = bearing_between_points(&state_start_point, &pos);
-				direction_known = true;
-				printf("rtp: direction measured over %d mm, heading %.0f\n", distance_between_points(&state_start_point, &pos), direction);
-				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4); // stop mower
+			} else if (calculate_direction()) {
+				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4);
 				mctrstate = mctr_run_to_point_start;
 			}
 			break;
 		case mctr_rtp_wait_for_turn:
 			if(collision_handling(mctr_run_to_point_start)) {
-				direction_known = false;
 				break;
 			}
-			pos = current_point();
+			pos = gga_log[gga_log_pos];
 			if (distance_between_points(&pos, &wo_target) < AT_POINT_MM) {
 				printf("rtp: at point while turning, %d mm to go\n", distance_between_points(&pos, &wo_target));
-				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4); // stop mower
+				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4);
 				mctrstate = mctr_read_wo_line;
 			} else if (status.state == STATE_RC_TURNING) {
 				if (!turn_started) {
@@ -448,9 +664,9 @@ void mowercontrol_execute()
 				turn_started = true;
 			} else if (turn_started) {
 				printf("rtp: turn complete, running at speed %d\n", RUN_SPEED);
-				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ RUN_SPEED, RUN_SPEED, 0, 0 }, 4);
-				state_start_point = pos;
-				state_deadline = now_ms() + DIRECTION_MEASURE_MS;
+				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ RUN_SPEED, RUN_SPEED, disc_speed, 0 }, 4);
+
+
 				mctrstate = mctr_run_towards_point;
 			} else if (now_ms() >= state_deadline) {
 				printf("rtp: turn never reported, carrying on\n");
@@ -459,26 +675,23 @@ void mowercontrol_execute()
 			break;
 		case mctr_run_towards_point:
 			if(collision_handling(mctr_run_to_point_start)) {
-				direction_known = false;
 				break;
 			}
-			pos = current_point();
+			pos = gga_log[gga_log_pos];
 			if (distance_between_points(&pos, &wo_target) < AT_POINT_MM) {
 				printf("rtp: at point, %d mm to go\n", distance_between_points(&pos, &wo_target));
-				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4); // stop mower
+				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4);
 				mctrstate = mctr_read_wo_line;
 			} 
-			else if (now_ms() >= state_deadline && distance_between_points(&state_start_point, &pos) >= MIN_MEASURE_MM) {
-				direction = bearing_between_points(&state_start_point, &pos);
+			else if (calculate_direction()) {
 				turn = fmod(bearing_between_points(&pos, &wo_target) - direction + 540.0, 360.0) - 180.0;
-				printf("rtp: direction measured over %d mm, heading %.0f, %d mm to go, off course %.0f deg\n", distance_between_points(&state_start_point, &pos), direction, distance_between_points(&pos, &wo_target), turn);
 				if (fabs(turn) > TARGET_BEHIND_DEG) {
-					printf("rtp: target behind, giving up on the point\n");
-					mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4); // stop mower
+					printf("rtp: heading %.0f, %d mm to go, off course %.0f deg, target behind, giving up on the point\n", direction, distance_between_points(&pos, &wo_target), turn);
+					mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4);
 					mctrstate = mctr_read_wo_line;
 				} else if (fabs(turn) > OFF_COURSE_DEG) {
-					printf("rtp: turn ordered %d deg %s at speed %d\n", (int)fabs(turn), turn < 0 ? "left" : "right", RUN_SPEED);
-					mowercom_send(MSG_REMOTE_CONTROL_TURN, (uint8_t[]){ RUN_SPEED, (uint8_t)fabs(turn), turn < 0 ? 0 : 1, 0, 0 }, 5);
+					printf("rtp: heading %.0f, %d mm to go, off course %.0f deg, turn ordered %d deg %s at speed %d\n", direction, distance_between_points(&pos, &wo_target), turn, (int)fabs(turn), turn < 0 ? "left" : "right", RUN_SPEED);
+					mowercom_send(MSG_REMOTE_CONTROL_TURN, (uint8_t[]){ RUN_SPEED, (uint8_t)fabs(turn), turn < 0 ? 0 : 1, disc_speed, 0 }, 5);
 					turn_started = false;
 					state_deadline = now_ms() + TURN_START_MS;
 					direction = bearing_between_points(&pos, &wo_target);
@@ -537,6 +750,64 @@ void mowercontrol_execute()
 				printf("collision: turn never reported, carrying on\n");
 				turn_started = true;
 			}
+			break;
+		case mctr_mow:
+			if (now_ms() >= mow_deadline) {
+				printf("mow: time is up, stopping\n");
+				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4);
+				mctrstate = mctr_read_wo_line;
+			}
+			break;
+		case mctr_mow_polygon:
+			if (now_ms() >= mow_deadline) {
+				printf("mow polygon: time is up, stopping\n");
+				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4);
+				mctrstate = mctr_read_wo_line;
+				break;
+			}
+			if (now_ms() < state_deadline) {
+				break;
+			}
+			pos = gga_log[gga_log_pos];
+			if (!point_in_polygon(&pos)) {	/* the turn goes out while it still rolls, a turn from rest is ignored */
+				if (calculate_direction()) {
+					turn_towards_center();
+				} else {
+					printf("mow polygon: outside, no direction, running straight to get one\n");
+					mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ RUN_SPEED, RUN_SPEED, 0, 0 }, 4);
+					mctrstate = mctr_mow_outside_run;
+				}
+			}
+			break;
+		case mctr_mow_outside_run:
+			if (collision_handling(mctr_mow_outside_run)) {
+				break;
+			}
+			if (calculate_direction()) {
+				turn_towards_center();
+			}
+			break;
+		case mctr_mow_outside_turn:
+			if (collision_handling(mctr_mow_check_wire)) {
+				break;
+			}
+			if (status.state == STATE_RC_TURNING) {
+				turn_started = true;
+			} else if (turn_started) {
+				mctrstate = mctr_mow_check_wire;
+			} else if (now_ms() >= state_deadline) {
+				printf("mow polygon: turn never reported, carrying on\n");
+				turn_started = true;
+			}
+			break;
+		case mctr_mow_check_wire:
+			if (collision_handling(mctr_mow_check_wire)) {
+				break;
+			}
+			printf("mow polygon: inside the wire, resuming mow\n");
+			mowercom_send(MSG_REMOTE_CONTROL_MOW, NULL, 0);
+			state_deadline = now_ms() + MOW_RESUME_MS;
+			mctrstate = mctr_mow_polygon;
 			break;
 		default:
 			printf("Illegal mctrstate: %d", (int)mctrstate);

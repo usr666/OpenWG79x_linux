@@ -27,7 +27,7 @@ fix_quality            0 invalid, 1 GPS, 2 DGPS, 3 PPS, 4 RTK fixed, 5 RTK float
 satellites_used        satellites used in the fix
 hdop                   horizontal dilution of precision
 wifi_signal            wifi signal strength in dBm. -1 (best signal) to -100 (worst signal)
-mower_state            0 idle, 1 debug, 2 menu, 3 mow, 4 startcharge, 5 charging, 6 wait_for_schedule, 7 stopped, 8 stopped_2
+mower_state            0 idle, 1 debug, 2 menu, 3 mow, 4 startcharge, 5 charging, 6 wait_for_schedule, 7 stopped, 8 stopped_2, 32 rc_stopped, 33 rc_running, 34 rc_turning, 35 rc_normal_mow, 36 rc_finding_charge, 37 rc_charging
 battery_soc_percent    battery charge, 0-100
 front_bump             1 = front bumper triggered
 lift                   1 = mower lifted
