@@ -10,6 +10,7 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include "log.h"
 #include "mowercom.h"
 
 #define FRAME_START      0x7E
@@ -112,11 +113,11 @@ int mowercom_open(const char *device)
 	int fd = open(device, O_RDWR | O_NOCTTY | O_NONBLOCK);
 
 	if (fd < 0) {
-		printf("open %s: %s\n", device, strerror(errno));
+		logf(INFO, "open %s: %s\n", device, strerror(errno));
 		return -1;
 	}
 	if (tcgetattr(fd, &tio) < 0) {
-		printf("tcgetattr %s: %s\n", device, strerror(errno));
+		logf(INFO, "tcgetattr %s: %s\n", device, strerror(errno));
 		close(fd);
 		return -1;
 	}
@@ -130,7 +131,7 @@ int mowercom_open(const char *device)
 	tio.c_cc[VTIME] = 0;
 
 	if (tcsetattr(fd, TCSANOW, &tio) < 0) {
-		printf("tcsetattr %s: %s\n", device, strerror(errno));
+		logf(INFO, "tcsetattr %s: %s\n", device, strerror(errno));
 		close(fd);
 		return -1;
 	}
@@ -161,7 +162,7 @@ int mowercom_read(uint8_t *msgid, void *data, size_t size, size_t *len)
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				return 0;
 			}
-			printf("read %s: %s\n", uart_name, strerror(errno));
+			logf(INFO, "read %s: %s\n", uart_name, strerror(errno));
 			return -1;
 		}
 		rx_len = (size_t)n;
@@ -200,7 +201,7 @@ int mowercom_send(uint8_t msgid, const void *data, size_t len)
 	}
 
 	if (write(uart_fd, wire, n) != (ssize_t)n) {
-		printf("write %s: %s\n", uart_name, strerror(errno));
+		logf(INFO, "write %s: %s\n", uart_name, strerror(errno));
 		return -1;
 	}
 	return 0;

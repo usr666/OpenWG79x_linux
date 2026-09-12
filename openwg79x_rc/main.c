@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "gps.h"
+#include "log.h"
 #include "mowercom.h"
 #include "mowercontrol.h"
 #include "tcpcom.h"
@@ -62,7 +63,7 @@ static FILE *log_open(const char *path)
 	FILE *f = fopen(path, "w");
 
 	if (!f) {
-		printf("open %s: %s\n", path, strerror(errno));
+		logf(INFO, "open %s: %s\n", path, strerror(errno));
 		return NULL;
 	}
 	fprintf(f, "%s", LOG_HEADER);
@@ -140,7 +141,7 @@ static void log_sample(void)
 		return;
 	}
 	file_samples = 0;
-	printf("\ncontinuing in %s\n", log_path);
+	logf(INFO, "\ncontinuing in %s\n", log_path);
 }
 
 int main(int argc, char **argv)
@@ -157,26 +158,26 @@ int main(int argc, char **argv)
 
 	setvbuf(stdout, NULL, _IOLBF, 0);	/* systemd gives us a pipe, which is block buffered by default */
 
-	printf("openwg79x_rc built %s %s\n", __DATE__, __TIME__);
+	logf(INFO, "openwg79x_rc built %s %s\n", __DATE__, __TIME__);
 
 	log_name(log_path, sizeof(log_path));
 
 	uart_fd = mowercom_open(uart_device);
 	if (uart_fd < 0) {
-		printf("Failed to open mower uart %s\n", uart_device);
+		logf(INFO, "Failed to open mower uart %s\n", uart_device);
 		return 1;
 	}
 
 	gps_fd = gps_open();
 	if (gps_fd < 0) {
-		printf("Failed to open gpspipe\n");
+		logf(INFO, "Failed to open gpspipe\n");
 		mowercom_close();
 		return 1;
 	}
 
 	log_file = log_open(log_path);
 	if (!log_file) {
-		printf("Failed to open log file %s\n", log_path);
+		logf(INFO, "Failed to open log file %s\n", log_path);
 		gps_close();
 		mowercom_close();
 		return 1;
@@ -184,7 +185,7 @@ int main(int argc, char **argv)
 
 	tcp_fd = tcpcom_open();
 
-	printf("openwg79x_rc: uart=%s log=%s tcp=%d\n", uart_device, log_path, TCPCOM_PORT);
+	logf(INFO, "openwg79x_rc: uart=%s log=%s tcp=%d\n", uart_device, log_path, TCPCOM_PORT);
 
 	fds[0].fd = uart_fd;
 	fds[1].fd = gps_fd;
@@ -212,7 +213,7 @@ int main(int argc, char **argv)
 				log_sample();
 			}
 		} else if (i < 0) {
-			printf("mower uart lost\n");
+			logf(INFO, "mower uart lost\n");
 			return 1;
 		}
 
@@ -231,6 +232,6 @@ int main(int argc, char **argv)
 	gps_close();
 	mowercom_close();
 
-	printf("exit: stopped\n");
+	logf(INFO, "exit: stopped\n");
 	return 0;
 }

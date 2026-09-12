@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "log.h"
 #include "tcpcom.h"
 
 static int listen_fd = -1;
@@ -24,7 +25,7 @@ static void set_nonblock(int fd)
 
 static void drop_client(int i)
 {
-	printf("tcp: client %d closed\n", i);
+	logf(INFO, "tcp: client %d closed\n", i);
 	close(clients[i]);
 	clients[i] = -1;
 }
@@ -41,7 +42,7 @@ int tcpcom_open(void)
 
 	listen_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (listen_fd < 0) {
-		printf("tcp socket: %s\n", strerror(errno));
+		logf(INFO, "tcp socket: %s\n", strerror(errno));
 		return -1;
 	}
 
@@ -54,7 +55,7 @@ int tcpcom_open(void)
 	addr.sin_port = htons(TCPCOM_PORT);
 
 	if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 || listen(listen_fd, TCPCOM_MAX_CLIENTS) < 0) {
-		printf("tcp port %d: %s\n", TCPCOM_PORT, strerror(errno));
+		logf(INFO, "tcp port %d: %s\n", TCPCOM_PORT, strerror(errno));
 		close(listen_fd);
 		listen_fd = -1;
 		return -1;
@@ -94,11 +95,11 @@ void tcpcom_accept(void)
 	for (i = 0; i < TCPCOM_MAX_CLIENTS; i++) {
 		if (clients[i] < 0) {
 			clients[i] = fd;
-			printf("tcp: client %d connected\n", i);
+			logf(INFO, "tcp: client %d connected\n", i);
 			return;
 		}
 	}
-	printf("tcp: no free slot, connection refused\n");
+	logf(INFO, "tcp: no free slot, connection refused\n");
 	close(fd);	/* no free slot */
 }
 
@@ -115,7 +116,7 @@ int tcpcom_read(uint8_t *data, size_t size)
 
 		n = read(clients[i], data, size);
 		if (n > 0) {
-			printf("tcp: %d bytes from client %d\n", (int)n, i);
+			logf(INFO, "tcp: %d bytes from client %d\n", (int)n, i);
 			return (int)n;
 		}
 		if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {

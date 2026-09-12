@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "gps.h"
+#include "log.h"
 
 #define GPSPIPE_CMD "gpspipe -r"
 
@@ -151,7 +152,7 @@ int gps_open(void)
 {
 	gps_pipe = popen(GPSPIPE_CMD, "r");
 	if (!gps_pipe) {
-		printf("popen %s: %s\n", GPSPIPE_CMD, strerror(errno));
+		logf(INFO, "popen %s: %s\n", GPSPIPE_CMD, strerror(errno));
 		return -1;
 	}
 	gps_fd = fileno(gps_pipe);
@@ -233,7 +234,7 @@ void gps_timestamp(const nmea_gga_t *gga, const nmea_rmc_t *rmc, char *out, size
 		mon  = tm.tm_mon + 1;
 		day  = tm.tm_mday;
 		if (!warned_no_date) {
-			printf("no RMC yet - dating samples from the system clock\n");
+			logf(INFO, "no RMC yet - dating samples from the system clock\n");
 			warned_no_date = 1;
 		}
 	}
