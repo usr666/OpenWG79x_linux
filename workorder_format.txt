@@ -37,6 +37,7 @@ latitude_nmea          verbatim NMEA ddmm.mmmmm; deg = floor(v/100), decimal = d
 latitude_hemisphere    N or S; S is negative
 longitude_nmea         verbatim NMEA dddmm.mmmmm; converted as latitude_nmea
 longitude_hemisphere   E or W; W is negative
+collision_handling     0=go around obstacles, 1=stop when hitting obstacles
 
 Mow
 cmd_id                 5

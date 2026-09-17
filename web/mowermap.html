@@ -21,13 +21,18 @@
     padding: 6px 8px 4px; background: #181b1f; border-top: 1px solid #2b3238;
   }
 
-  /* Handles on the graph edges, extending the window into the past and future. */
-  #earlier, #later {
+  /* Handles on the graph edges, moving the window through time. */
+  #earlier, #forward {
     position: absolute; top: 50%; transform: translateY(-50%); z-index: 5;
-    width: 20px; height: 64px; padding: 0; font-size: 16px; line-height: 1;
   }
-  #earlier { left: 0; border-left: none; border-radius: 0 5px 5px 0; }
-  #later { right: 0; border-right: none; border-radius: 5px 0 0 5px; }
+  #earlier, #forward button {
+    width: 20px; padding: 0; font-size: 16px; line-height: 1;
+  }
+  #earlier { left: 0; height: 64px; border-left: none; border-radius: 0 5px 5px 0; }
+  #forward { right: 0; display: flex; flex-direction: column; gap: 2px; }
+  #forward button { border-right: none; border-radius: 5px 0 0 5px; }
+  #later { height: 64px; }
+  #latest { height: 28px; }
 
   /* touch-action: a finger drag on the graph is a zoom selection, not a page gesture. */
   #chartCanvas { flex: 1; min-height: 0; width: 100%; display: block; cursor: crosshair; touch-action: none; }
@@ -118,6 +123,13 @@
   #legend .key { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
   #legend .key:last-child { margin-bottom: 0; }
   #legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
+  .marker {
+    width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
+    background: #4cc9f0; color: #14171a; border: 1px solid #14171a;
+    font: 11px/17px system-ui, sans-serif; text-align: center; font-weight: 600;
+  }
+  .marker.center { background: #43aa8b; }
+  .marker.target { background: #f3722c; }
   .hidden { display: none !important; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #22262b; color: #e6e6e6; }
   .leaflet-popup-content { font-variant-numeric: tabular-nums; }
@@ -135,7 +147,10 @@
   <div id="map"></div>
   <div id="chart">
     <button id="earlier" title="Extend the window further back in time">&laquo;</button>
-    <button id="later" title="Extend the window further forward in time">&raquo;</button>
+    <div id="forward">
+      <button id="later" title="Extend the window further forward in time">&raquo;</button>
+      <button id="latest" title="Jump to the newest samples">&#9197;</button>
+    </div>
     <canvas id="chartCanvas"></canvas>
   </div>
 </div>
@@ -259,6 +274,12 @@ function addOverlay(layer, name, show) {
 addOverlay(sat, "Satellite", true);
 addOverlay(osm, "OpenStreetMap", false);
 
+/* Registered before the listener below: adding an overlay the control knows about
+   fires overlayadd, and saveState reads state this script has not reached yet. */
+const woLayer = L.layerGroup();   /* the workorder this page started */
+
+addOverlay(woLayer, "Workorder", true);
+
 map.on("overlayadd overlayremove", saveState);
 
 const trackLayer  = L.layerGroup().addTo(map);   /* the coloured paths       */
@@ -291,6 +312,7 @@ function parseCsv(text) {
   const rows = [];
   let skipped = 0;
   let volt = null, current = null;   /* fieldtype 2, carried onto the rows that follow */
+  const events = [];                 /* fieldtype 4, timed by the row before it */
 
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
@@ -298,6 +320,7 @@ function parseCsv(text) {
 
     const f = line.split(",");
     if (f[0] === "2" && f.length >= 4) { volt = num(f[2]); current = num(f[3]); continue; }
+    if (f[0] === "4" && f.length >= 3) { events.push({ t: rows.length ? rows[rows.length - 1].t : null, status: +f[1], name: f[2] }); continue; }
     if (/^[0-9]{1,3}$/.test(f[0]) && f[0] !== "1") continue;   /* v2 fieldtype we do not read */
 
     const c = f[0] === "1" ? V2 : V1;
@@ -316,7 +339,7 @@ function parseCsv(text) {
       wire_right: num(f[c.wire_right]), wire_left: num(f[c.wire_left]), near_wire: num(f[c.near_wire])
     });
   }
-  return { rows, skipped };
+  return { rows, skipped, events };
 }
 
 /* --------------------------------------------------------------- colour -- */
@@ -596,8 +619,12 @@ function updateCursor(i) {
 
   const line = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
   const box = document.getElementById("sample");
+  const wo = woFor(r.t);
 
-  box.innerHTML = line("Time", stamp(r)) + line("SoC", `${r.soc ?? "?"} %`) + line("State", stateName(r.state));
+  woStatus(wo);
+
+  box.innerHTML = line("Time", stamp(r)) + line("SoC", `${r.soc ?? "?"} %`) + line("State", stateName(r.state)) +
+                  (wo ? line("Workorder", wo) : "");
   box.classList.remove("hidden");
 }
 
@@ -874,6 +901,17 @@ document.getElementById("earlier").addEventListener("click", () =>
 document.getElementById("later").addEventListener("click", () =>
   setRange(viewRange.t0, viewRange.t1 + (viewRange.t1 - viewRange.t0) / 2));
 
+/* The window keeps its span and ends on the newest sample there is. The mower
+   clock runs ahead of this browser now and then, so a sample already shown past
+   now still counts as the end. */
+document.getElementById("latest").addEventListener("click", () => {
+  const rows = windowRows();
+  const span = viewRange.t1 - viewRange.t0;
+  const end = Math.max(Date.now(), rows.length ? rows[rows.length - 1].t : 0);
+
+  setRange(end - span, end);
+});
+
 new ResizeObserver(() => drawChart()).observe(chartCanvas);
 
 /* -------------------------------------------------------------- loading -- */
@@ -911,8 +949,9 @@ async function toggle(track) {
     renderBusy();
     say("Loading " + track.name + " …");
     try {
-      const { rows, skipped } = await fetchRows(track);
+      const { rows, skipped, events } = await fetchRows(track);
       track.loading = false;
+      woAdd(events, rows.length ? rows[0].t : null);
       if (!rows.length) { say("No usable rows in " + track.name, true); renderBusy(); return; }
       track.rows = rows;
       say(`${track.name}: ${rows.length} samples` + (skipped ? `, ${skipped} rows skipped` : ""));
@@ -952,7 +991,18 @@ function tracksInWindow() {
   for (let i = 0; i < logs.length; i++) {
     const from = fileStart(logs[i].name);
     const to = i ? fileStart(logs[i - 1].name) : Infinity;
-    if (from <= viewRange.t1 && to >= viewRange.t0) hits.push(logs[i]);
+    const rows = logs[i].rows;
+    const first = rows && rows.length ? rows[0].t : null;
+    const last = rows && rows.length ? rows[rows.length - 1].t : null;
+
+    /* The names only say where a file probably starts. A file already loaded
+       says where it really reaches: its rows can run past the next name, after
+       a restart with the clock still wrong, or when the feed appended to it. */
+    if (first != null && last != null) {
+      if (first <= viewRange.t1 && last >= viewRange.t0) hits.push(logs[i]);
+    } else if (from <= viewRange.t1 && to >= viewRange.t0) {
+      hits.push(logs[i]);
+    }
   }
   return hits;
 }
@@ -973,7 +1023,8 @@ async function loadWindow(refetch) {
       t.loading = true;
       renderBusy();
       try {
-        const { rows } = await fetchRows(t);
+        const { rows, events } = await fetchRows(t);
+        woAdd(events, rows.length ? rows[0].t : null);
         t.rows = rows.length ? withLiveTail(rows, t.rows) : t.rows;
       } catch (e) {
         say("Could not load " + t.name + ": " + e.message, true);
@@ -1216,7 +1267,12 @@ function liveMessage(data) {
   liveSeen = Date.now();
 
   /* One parse for the whole batch: fieldtype 2 carries onto the rows after it. */
-  const { rows } = parseCsv(lines.join("\n"));
+  const { rows, events } = parseCsv(lines.join("\n"));
+
+  if (events.length) {
+    woAdd(events, rows.length ? rows[rows.length - 1].t : Date.now());
+    updateCursor(chartIndex);
+  }
   if (liveOn && rows.length && liveAppend(rows)) redraw(false);
   liveButton();
 }
@@ -1257,6 +1313,36 @@ setInterval(() => {
    Names outside a-z A-Z 0-9 _- are skipped: they cannot be sent as CSV. */
 
 const WORKORDER_DIR = "workorder/";
+const WO_NAME = /^[A-Za-z0-9_-]+$/;   /* the names the mower accepts, and all a URL may hold */
+
+/* Fieldtype 4 from every file and from the feed, oldest first. Files overlap and
+   get refetched, so an event already held is not taken twice. */
+const WO_EVENTS = [];
+
+let woShown = "";   /* the workorder on the map, "" when none */
+
+/* `at` times an event the file left untimed: one that came before the first
+   sample of its file, or over the feed in a batch holding no sample at all. */
+function woAdd(events, at) {
+  for (const e of events) {
+    const t = e.t == null ? at : e.t;
+
+    if (t != null && !WO_EVENTS.some(x => x.t === t && x.status === e.status && x.name === e.name)) {
+      WO_EVENTS.push({ t, status: e.status, name: e.name });
+    }
+  }
+  WO_EVENTS.sort((a, b) => a.t - b.t);
+}
+
+/* What the mower had running at that moment: the last thing it reported before it. */
+function woFor(t) {
+  let name = "";
+
+  for (const e of WO_EVENTS) {
+    if (e.t <= t) name = e.status === 1 ? e.name : "";
+  }
+  return WO_NAME.test(name) ? name : "";
+}
 const woDialog = document.getElementById("woDialog");
 
 const woReady = () => !!liveSocket && liveSocket.readyState === WebSocket.OPEN;
@@ -1276,6 +1362,61 @@ function woSend(action, name) {
   if (!woReady()) return;
   liveSocket.send(new TextEncoder().encode(`1,${action},${name}\n`));
   document.getElementById("woSent").textContent = action === 1 ? "Sent: run " + name : "Sent: abort";
+}
+
+/* One workorder at a time. Called for every cursor step, so a name that is
+   already drawn is left alone rather than fetched again. */
+function woStatus(name) {
+  if (name === woShown) return;
+
+  woShown = name;
+  woLayer.clearLayers();
+  if (name) woShow(name);
+}
+
+/* The workorder itself, drawn the way woeditor draws it: run-to-point rows
+   numbered and joined by a dashed line, polygons and lines in green. */
+function woShow(name) {
+  fetch(WORKORDER_DIR + name + ".wo", { cache: "no-store" })
+    .then(res => res.ok ? res.text() : Promise.reject(new Error(`HTTP ${res.status} ${res.statusText}`)))
+    .then(text => { if (woShown === name) woDraw(text); })   /* a slow fetch cannot replace a newer workorder */
+    .catch(e => say("Could not read " + name + ".wo: " + e.message, true));
+}
+
+function woMarker(latlng, text, cls) {
+  return L.marker(latlng, { icon: L.divIcon({ className: "", iconSize: null, html: `<div class="marker ${cls}">${text}</div>` }) });
+}
+
+const woAt = (f, i) => L.latLng(nmeaToDeg(f[i], f[i + 1]), nmeaToDeg(f[i + 2], f[i + 3]));
+
+function woDraw(text) {
+  const rows = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith("#")).map(l => l.split(","));
+  const points = [];
+
+  woLayer.clearLayers();
+
+  rows.forEach((f, i) => {
+    const n = +f[1];
+    const corners = +f[6];
+    const pts = [];
+
+    if (+f[0] === 4 && f.length >= 5) {
+      points.push(woAt(f, 1));
+      woMarker(woAt(f, 1), i + 1, "").addTo(woLayer);
+    } else if (+f[0] === 7 && f.length >= 7 + 4 * corners) {
+      for (let k = 0; k < corners; k++) { pts.push(woAt(f, 7 + k * 4)); }
+      L.polygon(pts, { color: "#43aa8b", weight: 2, opacity: .9, fillOpacity: .08 }).addTo(woLayer);
+      woMarker(woAt(f, 2), "c", "center").addTo(woLayer);
+    } else if (+f[0] === 8 && f.length >= 3 + 4 * n) {
+      for (let k = 0; k < n; k++) { pts.push(woAt(f, 3 + k * 4)); }
+      L.polyline(pts, { color: "#43aa8b", weight: 2, opacity: .9 }).addTo(woLayer);
+      pts.forEach((ll, k) => woMarker(ll, k + 1, k + 1 === +f[2] ? "target" : "").addTo(woLayer));
+    }
+  });
+
+  if (points.length > 1) {
+    L.polyline(points, { color: "#4cc9f0", weight: 2, opacity: .8, dashArray: "4 4" }).addTo(woLayer);
+  }
 }
 
 async function woNames() {
@@ -1317,8 +1458,8 @@ async function woOpen() {
   const names = await woNames();
   if (!woDialog.open) return;                  /* cancelled while listing */
 
-  list.replaceChildren(...(names.length ? names.map(n => woItem(n, n))
-                                        : [woItem("No .wo files in " + WORKORDER_DIR)]));
+  list.replaceChildren(...(names.length ? names.map(n => woItem(n, n.replace(/\.wo$/, "")))
+                                       : [woItem("No .wo files in " + WORKORDER_DIR)]));
 }
 
 woButton();

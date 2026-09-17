@@ -329,7 +329,8 @@ const COMMANDS = [
     { key: "lat", label: "Latitude",  type: "text", def: "" },
     { key: "ns",  label: "N/S",       type: "sel", options: [["N", "N"], ["S", "S"]], def: "N" },
     { key: "lon", label: "Longitude", type: "text", def: "" },
-    { key: "ew",  label: "E/W",       type: "sel", options: [["E", "E"], ["W", "W"]], def: "E" }
+    { key: "ew",  label: "E/W",       type: "sel", options: [["E", "E"], ["W", "W"]], def: "E" },
+    { key: "coll", label: "Collision", type: "sel", options: [["0", "go around"], ["1", "stop"]], def: "0" }
   ]},
   { id: 5, name: "Mow", fields: [
     { key: "time", label: "Mow time s", type: "num", min: 0, max: 65535, def: 600 }
@@ -433,7 +434,7 @@ function describe(row) {
     case 1: return `run  left ${v[0]}%  right ${v[1]}%  disc ${v[2]}%${force(v[3])}`;
     case 2: return `turn ${v[1]}° ${v[2] === "1" ? "right" : "left"}  speed ${v[0]}%  disc ${v[3]}%${force(v[4])}`;
     case 3: return v[0] === "0" ? `wait ${v[1]}s` : `wait for ${event}, timeout ${v[1]}s`;
-    case 4: return `point ${v[0]}${v[1]}  ${v[2]}${v[3]}`;
+    case 4: return `point ${v[0]}${v[1]}  ${v[2]}${v[3]}${v[4] === "1" ? ", stop on collision" : ""}`;
     case 5: return `mow ${v[0]}s`;
     case 6: return "go to charge";
     case 7: return `mow polygon of ${v[5]} corners, ${v[0]}s`;
@@ -560,7 +561,7 @@ const point = { lat: "", ns: "N", lon: "", ew: "E" };   /* the pending click */
 function pointFields(latlng) {
   const values = [nmea(latlng.lat, 2), latlng.lat < 0 ? "S" : "N", nmea(latlng.lng, 3), latlng.lng < 0 ? "W" : "E"];
 
-  setFields(byId(4), values);
+  setFields(byId(4), [...values, getFields(byId(4))[4]]);   /* the collision choice survives the click */
   openBlock(byId(4).block);
   Object.assign(point, { lat: values[0], ns: values[1], lon: values[2], ew: values[3] });
   drawPoints();
@@ -690,7 +691,7 @@ function drawPoints() {
     coords.push(latlng);
     m.on("dragend", () => {
       const p = m.getLatLng();
-      row.values = [nmea(p.lat, 2), p.lat < 0 ? "S" : "N", nmea(p.lng, 3), p.lng < 0 ? "W" : "E"];
+      row.values.splice(0, 4, nmea(p.lat, 2), p.lat < 0 ? "S" : "N", nmea(p.lng, 3), p.lng < 0 ? "W" : "E");
       if (i === selected) setFields(byId(4), row.values);
       change();
     });
@@ -718,6 +719,7 @@ const MOW_STEP_M = 0.20;
 const MOW_RUN_SPEED = 30;
 const MOW_TURN_SPEED = 0;      /* 0 turns on the spot, which is the exact 90 */
 const MOW_TURN_TIMEOUT = 10;
+const MOW_DISC_SPEED = 50;
 
 const mow = { picking: false, pts: [] };
 
@@ -746,19 +748,20 @@ function mowAreaRows([p1, p2, p3, p4]) {
   const dirP1 = turnDir(bearing(p2, p1), bearing(p1, p4));   /* at the p1 end, towards p4 */
   const rails = Math.floor(Math.min(metres(p1, p4), metres(p2, p3)) / MOW_STEP_M);
 
-  const addPoint = ll => out.push({ cmd: 4, values: [nmea(ll.lat, 2), ll.lat < 0 ? "S" : "N", nmea(ll.lng, 3), ll.lng < 0 ? "W" : "E"] });
+  const addPoint = ll => out.push({ cmd: 4, values: [nmea(ll.lat, 2), ll.lat < 0 ? "S" : "N", nmea(ll.lng, 3), ll.lng < 0 ? "W" : "E", "1"] });
   const addTurn = dir => {
-    out.push({ cmd: 2, values: [String(MOW_TURN_SPEED), "90", dir, "0", "0"] });
+    out.push({ cmd: 2, values: [String(MOW_TURN_SPEED), "90", dir, String(MOW_DISC_SPEED), "0"] });
     out.push({ cmd: 3, values: ["1", String(MOW_TURN_TIMEOUT)] });
   };
   const addStep = dir => {
     addTurn(dir);
-    out.push({ cmd: 1, values: [String(MOW_RUN_SPEED), String(MOW_RUN_SPEED), "0", "0"] });
+    out.push({ cmd: 1, values: [String(MOW_RUN_SPEED), String(MOW_RUN_SPEED), String(MOW_DISC_SPEED), "0"] });
     out.push({ cmd: 3, values: ["0", "1"] });
     addTurn(dir);
   };
 
   addPoint(p1);
+  out.push({ cmd: 1, values: ["0", "0", String(MOW_DISC_SPEED), "0"] });   /* the disc the run to point rows inherit */
   addPoint(p2);
   for (let k = 1; k <= rails; k++) {
     addStep(dirP2);
@@ -834,6 +837,7 @@ function setFile(name, text) {
                : cmd && cmd.fields.length + 1;
 
     if (!s || s.startsWith("#")) continue;
+    if (cmd && cmd.point && f.length === want - 1) f.push("0");   /* written before collision_handling */
     if (cmd && f.length === want) rows.push({ cmd: cmd.id, values: f.slice(1) });
     else rows.push({ raw: s });
   }

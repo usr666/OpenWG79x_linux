@@ -9,12 +9,14 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "gps.h"
 #include "log.h"
+#include "main.h"
 #include "mowercom.h"
 #include "mowercontrol.h"
 #include "tcpcom.h"
@@ -100,6 +102,14 @@ static void log_row(const char *row)
 	tcpcom_broadcast(row);
 }
 
+void workorder_status(int status, const char *name)
+{
+	char line[LOG_LINE_MAX];
+
+	snprintf(line, sizeof(line), "4,%d,%s\n", status, name);
+	log_row(line);
+}
+
 static void log_write_sample(void)
 {
 	char line[LOG_LINE_MAX];
@@ -157,6 +167,7 @@ int main(int argc, char **argv)
 	struct pollfd fds[2];
 
 	setvbuf(stdout, NULL, _IOLBF, 0);	/* systemd gives us a pipe, which is block buffered by default */
+	srand(time(NULL));
 
 	logf(INFO, "openwg79x_rc built %s %s\n", __DATE__, __TIME__);
 
