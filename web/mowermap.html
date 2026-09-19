@@ -34,6 +34,10 @@
   #later { height: 64px; }
   #latest { height: 28px; }
 
+  /* The corner of the graph, in the room the axis end label leaves free. */
+  #chartTools { position: absolute; right: 2px; bottom: 2px; z-index: 5; display: flex; gap: 2px; }
+  #chartTools button { height: 20px; padding: 0 5px; font-size: 11px; line-height: 1; }
+
   /* touch-action: a finger drag on the graph is a zoom selection, not a page gesture. */
   #chartCanvas { flex: 1; min-height: 0; width: 100%; display: block; cursor: crosshair; touch-action: none; }
 
@@ -150,6 +154,10 @@
     <div id="forward">
       <button id="later" title="Extend the window further forward in time">&raquo;</button>
       <button id="latest" title="Jump to the newest samples">&#9197;</button>
+    </div>
+    <div id="chartTools">
+      <button id="reloadBtn" title="Read the logs for this window again">&#8635;</button>
+      <button id="day" title="Show the last 24 hours and jump to the newest sample">24h</button>
     </div>
     <canvas id="chartCanvas"></canvas>
   </div>
@@ -643,8 +651,8 @@ const CHANNELS = {
 
 let graphChannel = CHANNELS[STATE.channel] ? STATE.channel : "soc";
 
-/* The end labels are aligned inwards, so r only keeps the axis off the edge. */
-const PAD = { l: 42, r: 8, t: 8, b: 18 };
+/* r keeps the axis and its end label clear of the buttons in the corner. */
+const PAD = { l: 42, r: 58, t: 8, b: 18 };
 
 const chartCanvas = document.getElementById("chartCanvas");
 let chartIndex = 0;         /* row index the scrub cursor sits on       */
@@ -901,16 +909,21 @@ document.getElementById("earlier").addEventListener("click", () =>
 document.getElementById("later").addEventListener("click", () =>
   setRange(viewRange.t0, viewRange.t1 + (viewRange.t1 - viewRange.t0) / 2));
 
-/* The window keeps its span and ends on the newest sample there is. The mower
-   clock runs ahead of this browser now and then, so a sample already shown past
-   now still counts as the end. */
-document.getElementById("latest").addEventListener("click", () => {
+/* The window is given that span and ends on the newest sample there is, with the
+   cursor on it. The mower clock runs ahead of this browser now and then, so a
+   sample already shown past now still counts as the end. */
+function goLatest(span) {
   const rows = windowRows();
-  const span = viewRange.t1 - viewRange.t0;
   const end = Math.max(Date.now(), rows.length ? rows[rows.length - 1].t : 0);
 
   setRange(end - span, end);
-});
+}
+
+document.getElementById("latest").addEventListener("click", () => goLatest(viewRange.t1 - viewRange.t0));
+
+document.getElementById("day").addEventListener("click", () => goLatest(DEFAULT_SPAN_MS));
+
+document.getElementById("reloadBtn").addEventListener("click", reload);
 
 new ResizeObserver(() => drawChart()).observe(chartCanvas);
 

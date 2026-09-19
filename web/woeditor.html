@@ -146,6 +146,8 @@
     <div id="listHead">
       <span id="listName"></span>
       <button id="delete">Delete row</button>
+      <button id="up">Move up</button>
+      <button id="down">Move down</button>
       <span id="listInfo"></span>
     </div>
     <ol id="rows"></ol>
@@ -366,20 +368,12 @@ function buildCommands() {
 
     const buttons = document.createElement("div");
     buttons.className = "row";
-    buttons.innerHTML = cmd.poly || cmd.line
-      ? `<button id="pick${cmd.id}">Pick ${cmd.poly ? "polygon" : "line"}</button><button id="done${cmd.id}">Done</button>`
-      : `<button id="ins${cmd.id}">Insert</button><button id="rep${cmd.id}">Replace</button>`;
+    buttons.innerHTML = `<button>Insert</button><button>Replace</button>`;
     block.appendChild(buttons);
-
-    const replace = document.createElement("div");
-    replace.className = "row";
-    replace.innerHTML = `<button id="rep${cmd.id}">Replace</button>`;
-    if (cmd.poly) block.appendChild(replace);
     box.appendChild(block);
 
-    buttons.children[0].addEventListener("click", () => cmd.poly || cmd.line ? pickStart(cmd) : insertRow(cmd));
-    buttons.children[1].addEventListener("click", () => cmd.poly || cmd.line ? pickDone(cmd) : replaceRow(cmd));
-    if (cmd.poly) replace.children[0].addEventListener("click", () => replacePoly(cmd));
+    buttons.children[0].addEventListener("click", () => insertRow(cmd));
+    buttons.children[1].addEventListener("click", () => replaceRow(cmd));
     block.querySelector("h2").addEventListener("click", () => openBlock(block));
     setFields(cmd, cmd.fields.map(f => f.def));
     cmd.block = block;
@@ -388,10 +382,14 @@ function buildCommands() {
 }
 
 /* One block open at a time: the column stays short, and the open one is what
-   Insert and Replace work on. */
+   the map clicks, Insert and Replace work on. */
 function openBlock(block) {
   for (const b of document.querySelectorAll("#commands .cmd")) b.classList.toggle("open", b === block);
 }
+
+const openCmd = () => [...COMMANDS, MOW_AREA].find(c => c.block && c.block.classList.contains("open"));
+
+const picking = cmd => !!(cmd && (cmd.poly || cmd.line || cmd.mow));
 
 const fieldEl = (cmd, f) => document.getElementById(`f${cmd.id}_${f.key}`);
 
@@ -473,6 +471,8 @@ function renderRows() {
   document.getElementById("listName").textContent = name;
   document.getElementById("listInfo").textContent = `${rows.length} command(s), inserting ` + (selected < 0 ? "at the end" : "above row " + (selected + 1));
   document.getElementById("delete").disabled = selected < 0;
+  document.getElementById("up").disabled = selected < 1;
+  document.getElementById("down").disabled = selected < 0 || selected >= rows.length - 1;
   drawPoints();
 }
 
@@ -491,44 +491,53 @@ function change() {
   renderRows();
 }
 
+/* The rows a block stands for: the picking blocks stand for the points clicked
+   on the map, every other block for its fields. Null means too few points. */
+function blockRows(cmd, values) {
+  const n = pick.cmd === cmd ? pick.pts.length : 0;
+  const points = pick.cmd === cmd ? pick.pts.flatMap(polyFields) : [];
+
+  if (cmd.mow) { return n === 4 ? mowAreaRows(pick.pts) : null; }
+  if (cmd.poly) { return n < 3 || n > PICK_MAX ? null : [{ cmd: cmd.id, values: [values[0], ...polyFields(polyCentre(pick.pts)), String(n), ...points] }]; }
+  if (cmd.line) { return n < 2 || n > PICK_MAX ? null : [{ cmd: cmd.id, values: [String(n), String(n), ...points] }]; }
+  return [{ cmd: cmd.id, values }];
+}
+
+const pickHint = cmd => cmd.mow ? "Click the 4 corners of the area on the map first" : `Click ${cmd.poly ? 3 : 2} to ${PICK_MAX} points on the map first`;
+
 function insertRow(cmd) {
   const values = getFields(cmd);
   const bad = checkFields(cmd, values);
+  const made = bad ? null : blockRows(cmd, values);
+  const at = selected < 0 ? rows.length : selected;
 
   if (bad) { say(bad, true); return; }
+  if (!made) { say(pickHint(cmd), true); return; }
 
-  const at = selected < 0 ? rows.length : selected;
-  rows.splice(at, 0, { cmd: cmd.id, values });
-  if (selected >= 0) selected++;        /* the selected row moved down */
-  if (cmd.point) point.lat = "";        /* the click is a row now */
+  rows.splice(at, 0, ...made);
+  if (selected >= 0) { selected += made.length; }   /* the selected row moved down */
+  if (cmd.point) { point.lat = ""; }                /* the click is a row now */
+  pick.pts = [];
   say("");
   change();
 }
 
+/* With nothing picked, Replace on a picking block writes its fields into the
+   selected row, so a polygon can be given a new mow time without drawing it again. */
 function replaceRow(cmd) {
   const row = rows[selected];
   const values = getFields(cmd);
   const bad = checkFields(cmd, values);
+  const made = bad ? null : blockRows(cmd, values);
 
   if (!row) { say("Select a row to replace", true); return; }
   if (bad) { say(bad, true); return; }
+  if (!made && row.cmd !== cmd.id) { say(pickHint(cmd), true); return; }
 
-  rows[selected] = { cmd: cmd.id, values };
-  if (cmd.point) point.lat = "";
-  say("");
-  change();
-}
-
-/* Only the mow time comes from the fields; the corners stay as they are drawn. */
-function replacePoly(cmd) {
-  const row = rows[selected];
-  const values = getFields(cmd);
-  const bad = checkFields(cmd, values);
-
-  if (!row || row.raw || row.cmd !== cmd.id) { say("Select a polygon row to replace", true); return; }
-  if (bad) { say(bad, true); return; }
-
-  row.values[0] = values[0];
+  if (made) { rows.splice(selected, 1, ...made); }
+  else { cmd.fields.forEach((f, i) => { row.values[i] = values[i]; }); }
+  if (cmd.point) { point.lat = ""; }
+  pick.pts = [];
   say("");
   change();
 }
@@ -537,6 +546,16 @@ function deleteRow() {
   if (selected < 0) return;
   rows.splice(selected, 1);
   selected = Math.min(selected, rows.length - 1);
+  change();
+}
+
+/* The moved row stays selected, so it can be walked to where it belongs. */
+function moveRow(step) {
+  const to = selected + step;
+
+  if (selected < 0 || to < 0 || to >= rows.length) { return; }
+  rows.splice(to, 0, ...rows.splice(selected, 1));
+  selected = to;
   change();
 }
 
@@ -583,38 +602,15 @@ const polyCentre = pts => L.latLng(pts.reduce((a, p) => a + p.lat, 0) / pts.leng
 
 const polyFields = ll => [nmea(ll.lat, 2), ll.lat < 0 ? "S" : "N", nmea(ll.lng, 3), ll.lng < 0 ? "W" : "E"];
 
-function pickStart(cmd) {
-  pick.cmd = pick.cmd === cmd ? null : cmd;
-  pick.pts = [];
-  say(pick.cmd ? `Click the ${cmd.poly ? "corners" : "points"} on the map, then Done` : "");
-  drawPoints();
-}
-
+/* The points belong to the block they were clicked into, so selecting a row to
+   insert in front of does not drop them. */
 function pickClick(latlng) {
+  const cmd = openCmd();
+
+  if (pick.cmd !== cmd) { pick.cmd = cmd; pick.pts = []; }
   pick.pts.push(latlng);
-  say(`${pick.pts.length} point(s) picked, click Done when finished`);
+  say(`${pick.pts.length} point(s) picked, Insert or Replace when finished`);
   drawPoints();
-}
-
-function pickDone(cmd) {
-  const min = cmd.poly ? 3 : 2;
-  const n = pick.pts.length;
-  const values = getFields(cmd);
-  const bad = checkFields(cmd, values);
-
-  if (pick.cmd !== cmd || n < min || n > PICK_MAX) { say(`Pick ${min} to ${PICK_MAX} points on the map first`, true); return; }
-  if (bad) { say(bad, true); return; }
-
-  const at = selected < 0 ? rows.length : selected;
-  const fields = cmd.poly ? [values[0], ...polyFields(polyCentre(pick.pts)), String(n)] : [String(n), String(n)];
-
-  for (const ll of pick.pts) fields.push(...polyFields(ll));
-  rows.splice(at, 0, { cmd: cmd.id, values: fields });
-  if (selected >= 0) selected++;
-  pick.cmd = null;
-  pick.pts = [];
-  say("");
-  change();
 }
 
 /* The selected polygon gets a handle on every corner and on its centre; the
@@ -703,10 +699,11 @@ function drawPoints() {
   rows.forEach((row, i) => { if (!row.raw && row.cmd === 8) drawLine(row, i); });
   if (point.lat) marker(L.latLng(degrees(point.lat, point.ns), degrees(point.lon, point.ew)), "", "pending", false).addTo(pathLayer);
   pick.pts.forEach((ll, i) => marker(ll, i + 1, "pending", false).addTo(pathLayer));
-  mow.pts.forEach((ll, i) => marker(ll, "p" + (i + 1), "pending", false).addTo(pathLayer));
 }
 
-map.on("click", e => mow.picking ? mowClick(e.latlng) : pick.cmd ? pickClick(e.latlng) : pointFields(e.latlng));
+/* A click goes to the block that is open: the picking blocks collect it, any
+   other block gets it as a run to point. */
+map.on("click", e => picking(openCmd()) ? pickClick(e.latlng) : pointFields(e.latlng));
 
 /* ----------------------------------------------------------- mow area -- */
 /* Four corners clicked in order round the area. The mower drives p1-p2, steps
@@ -720,8 +717,6 @@ const MOW_RUN_SPEED = 30;
 const MOW_TURN_SPEED = 0;      /* 0 turns on the spot, which is the exact 90 */
 const MOW_TURN_TIMEOUT = 10;
 const MOW_DISC_SPEED = 50;
-
-const mow = { picking: false, pts: [] };
 
 const M_PER_DEG = 111320;
 
@@ -772,31 +767,7 @@ function mowAreaRows([p1, p2, p3, p4]) {
   return out;
 }
 
-function mowClick(latlng) {
-  mow.pts.push(latlng);
-  if (mow.pts.length < 4) {
-    say(`Mow area: click p${mow.pts.length + 1}`);
-    drawPoints();
-    return;
-  }
-
-  const made = mowAreaRows(mow.pts);
-  const at = selected < 0 ? rows.length : selected;
-
-  mow.picking = false;
-  mow.pts = [];
-  rows.splice(at, 0, ...made);
-  if (selected >= 0) selected += made.length;
-  say(`Mow area: ${made.length} rows added`);
-  change();
-}
-
-function mowStart() {
-  mow.picking = !mow.picking;
-  mow.pts = [];
-  say(mow.picking ? "Mow area: click p1" : "");
-  drawPoints();
-}
+const MOW_AREA = { name: "Mow area", mow: true, fields: [] };
 
 function buildMowArea() {
   const block = document.createElement("div");
@@ -804,10 +775,15 @@ function buildMowArea() {
   block.className = "cmd";
   block.innerHTML = `<h2>Mow area</h2>`
     + `<div class="field"><label>Row spacing</label><span>${MOW_STEP_M * 100} cm</span></div>`
-    + `<div class="row"><button id="mowPick">Pick 4 corners</button></div>`;
+    + `<div class="row"><button>Insert</button><button>Replace</button></div>`;
+
+  const buttons = block.querySelectorAll("button");
+
   document.getElementById("commands").appendChild(block);
-  document.getElementById("mowPick").addEventListener("click", mowStart);
+  buttons[0].addEventListener("click", () => insertRow(MOW_AREA));
+  buttons[1].addEventListener("click", () => replaceRow(MOW_AREA));
   block.querySelector("h2").addEventListener("click", () => openBlock(block));
+  MOW_AREA.block = block;
 }
 
 /* --------------------------------------------------------------- file -- */
@@ -1017,6 +993,10 @@ document.getElementById("delGo").addEventListener("click", delFiles);
 document.getElementById("delCancel").addEventListener("click", () => delDialog.close());
 
 document.getElementById("delete").addEventListener("click", deleteRow);
+
+document.getElementById("up").addEventListener("click", () => moveRow(-1));
+
+document.getElementById("down").addEventListener("click", () => moveRow(1));
 
 addEventListener("beforeunload", e => { if (dirty) e.preventDefault(); });
 
