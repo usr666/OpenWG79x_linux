@@ -35,6 +35,7 @@
 #define COLLISION_TURN_DEG 90
 #define POLYGON_MAX_POINTS 32
 #define MOW_RESUME_MS 5000
+#define MOW_RESEND_MS 3000
 #define LINE_MAX_POINTS 32
 #define DIRECTION_PRINT_MS 1000
 #define DISC_SPEED 50
@@ -685,6 +686,7 @@ void mowercontrol_execute()
 			pos = gga_log[gga_log_pos];
 			logf(INFO, "rtp: %d mm to go, no heading, mowing to get one\n", distance_between_points(&pos, &wo_target));
 			mowercom_send(MSG_REMOTE_CONTROL_MOW, NULL, 0);
+			state_deadline = now_ms() + MOW_RESEND_MS;
 			mctrstate = mctr_rtp_determine_direction;
 			break;
 		case mctr_rtp_determine_direction:
@@ -696,6 +698,10 @@ void mowercontrol_execute()
 			} else if (calculate_direction(&direction)) {
 				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4);
 				mctrstate = mctr_run_to_point_start;
+			} else if (now_ms() >= state_deadline) {
+				logf(INFO, "rtp: still no heading, resending mow cmd\n");
+				mowercom_send(MSG_REMOTE_CONTROL_MOW, NULL, 0);
+				state_deadline = now_ms() + MOW_RESEND_MS;
 			}
 			break;
 		case mctr_rtp_wait_for_turn:
