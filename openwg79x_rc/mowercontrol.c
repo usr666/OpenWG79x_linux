@@ -720,6 +720,7 @@ void mowercontrol_execute()
 				logf(INFO, "rtp: turn complete, running at speed %d\n", RUN_SPEED);
 				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ RUN_SPEED, RUN_SPEED, disc_speed, 0 }, 4);
 				mctrstate = mctr_run_towards_point;
+				state_deadline = now_ms() + 20000;
 			} else if (now_ms() >= state_deadline) {
 				logf(INFO, "rtp: turn never reported, carrying on\n");
 				turn_started = true;
@@ -752,6 +753,10 @@ void mowercontrol_execute()
 					state_deadline = now_ms() + TURN_START_MS;
 					mctrstate = mctr_rtp_wait_for_turn;
 				}
+			} else if (now_ms() >= state_deadline) {
+				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ RUN_SPEED, RUN_SPEED, disc_speed, 0 }, 4);
+				state_deadline = now_ms() + 20000;
+				logf(WARN, "rtp: Nothing happened for 20s, resending run command\n");
 			}
 			break;
 		case mctr_collision_detected:
