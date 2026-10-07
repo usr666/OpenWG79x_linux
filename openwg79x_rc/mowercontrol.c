@@ -203,7 +203,7 @@ static void start_workorder(const char *name)
 	snprintf(wo_name, sizeof(wo_name), "%s", name);
 	logf(INFO, "workorder %s started\n", name);
 	workorder_status(1, wo_name);
-	disc_speed = 0;			/* a disc a previous workorder left on is not ours */
+	disc_speed = 0;
 	mctrstate = mctr_read_wo_line;
 }
 
@@ -367,6 +367,7 @@ static void wo_cmd_run_to_point(void)
 
 	wo_target = nmea_to_point(lat, ns, lon, ew);
 	wo_stop_on_bump = stop_on_bump != 0;
+	disc_speed = DISC_SPEED;
 	logf(INFO, "cmd run to point: %.7f %.7f, %s obstacles\n", wo_target.lat, wo_target.lon, wo_stop_on_bump ? "stop on" : "go around");
 	mctrstate = mctr_run_to_point_start;
 	mctrstate_after_pointfound = mctr_read_wo_line;
@@ -429,7 +430,8 @@ static void wo_cmd_mow_polygon(void)
 			}
 		}
 	}
-
+	
+	disc_speed = DISC_SPEED;
 	polygon_points = numpoints;
 	mow_deadline = now_ms() + (long long)mowtime * 1000;
 	logf(INFO, "cmd mow polygon: %d s, centre %.7f %.7f, %d corners\n", mowtime, mow_center.lat, mow_center.lon, numpoints);

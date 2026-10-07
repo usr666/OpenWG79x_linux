@@ -717,6 +717,8 @@ const MOW_RUN_SPEED = 30;
 const MOW_TURN_SPEED = 0;      /* 0 turns on the spot, which is the exact 90 */
 const MOW_TURN_TIMEOUT = 10;
 const MOW_DISC_SPEED = 50;
+const MOW_BACK_SPEED = -50;     /* reversed for a moment at every point reached */
+const MOW_BACK_TIME = 1;
 
 const M_PER_DEG = 111320;
 
@@ -743,9 +745,13 @@ function mowAreaRows([p1, p2, p3, p4]) {
   const dirP1 = turnDir(bearing(p2, p1), bearing(p1, p4));   /* at the p1 end, towards p4 */
   const rails = Math.floor(Math.min(metres(p1, p4), metres(p2, p3)) / MOW_STEP_M);
 
-  const addPoint = ll => out.push({ cmd: 4, values: [nmea(ll.lat, 2), ll.lat < 0 ? "S" : "N", nmea(ll.lng, 3), ll.lng < 0 ? "W" : "E", "1"] });
+  const addPoint = ll => {
+    out.push({ cmd: 4, values: [nmea(ll.lat, 2), ll.lat < 0 ? "S" : "N", nmea(ll.lng, 3), ll.lng < 0 ? "W" : "E", "1"] });
+    out.push({ cmd: 1, values: [String(MOW_BACK_SPEED), String(MOW_BACK_SPEED), String(MOW_DISC_SPEED), "1"] });
+    out.push({ cmd: 3, values: ["0", String(MOW_BACK_TIME)] });
+  };
   const addTurn = dir => {
-    out.push({ cmd: 2, values: [String(MOW_TURN_SPEED), "90", dir, String(MOW_DISC_SPEED), "0"] });
+    out.push({ cmd: 2, values: [String(MOW_TURN_SPEED), "90", dir, String(MOW_DISC_SPEED), "1"] });
     out.push({ cmd: 3, values: ["1", String(MOW_TURN_TIMEOUT)] });
   };
   const addStep = dir => {

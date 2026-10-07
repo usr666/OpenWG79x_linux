@@ -7,92 +7,92 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-  :root { color-scheme: dark; }
+  :root { color-scheme: light; }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
-  body { display: flex; font: 13px/1.4 system-ui, sans-serif; background: #14171a; color: #e6e6e6; }
+  body { display: flex; font: 13px/1.4 system-ui, sans-serif; background: #fff; color: #1b1f24; }
 
   #main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
-  #map { flex: 1; min-height: 0; background: #14171a; }
+  #map { flex: 1; min-height: 0; background: #fff; }
 
   /* ---- graph strip along the bottom quarter of the window ---- */
   #chart {
     height: 25%; flex: none; display: flex; flex-direction: column; position: relative;
-    padding: 6px 8px 4px; background: #181b1f; border-top: 1px solid #2b3238;
+    padding: 6px 8px 4px; background: #14171a; border-top: 1px solid #d7dbe0;
   }
 
-  /* Handles on the graph edges, moving the window through time. */
-  #earlier, #forward {
-    position: absolute; top: 50%; transform: translateY(-50%); z-index: 5;
+  /* The handle that pulls the window further into the past, the same size as the
+     one that pushes the other end forward. */
+  #earlier {
+    position: absolute; left: 2px; top: 50%; transform: translateY(-50%); z-index: 5;
   }
-  #earlier, #forward button {
-    width: 20px; padding: 0; font-size: 16px; line-height: 1;
-  }
-  #earlier { left: 0; height: 64px; border-left: none; border-radius: 0 5px 5px 0; }
-  #forward { right: 0; display: flex; flex-direction: column; gap: 2px; }
-  #forward button { border-right: none; border-radius: 5px 0 0 5px; }
-  #later { height: 64px; }
-  #latest { height: 28px; }
 
-  /* The corner of the graph, in the room the axis end label leaves free. */
-  #chartTools { position: absolute; right: 2px; bottom: 2px; z-index: 5; display: flex; gap: 2px; }
-  #chartTools button { height: 20px; padding: 0 5px; font-size: 11px; line-height: 1; }
+  /* Every other time control, one column down the other edge. */
+  #chartTools {
+    position: absolute; right: 2px; top: 50%; transform: translateY(-50%); z-index: 5;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  #earlier, #chartTools button {
+    width: 30px; height: 30px; padding: 0; font-size: 12px; line-height: 1;
+    background: #22262b; color: #e6e6e6; border-color: #3a424b;   /* the graph is dark, its buttons too */
+  }
+  #earlier:hover, #chartTools button:hover { background: #2c323a; }
 
   /* touch-action: a finger drag on the graph is a zoom selection, not a page gesture. */
   #chartCanvas { flex: 1; min-height: 0; width: 100%; display: block; cursor: crosshair; touch-action: none; }
 
-  section { padding: 10px; border-bottom: 1px solid #2b3238; }
+  section { padding: 10px; border-bottom: 1px solid #d7dbe0; }
   section.grow { flex: 1; min-height: 0; overflow-y: auto; border-bottom: none; }
-  h1 { font-size: 13px; margin: 0 0 8px; letter-spacing: .04em; text-transform: uppercase; color: #9aa4ae; }
-  h2 { font-size: 11px; margin: 0 0 6px; letter-spacing: .06em; text-transform: uppercase; color: #78828c; }
+  h1 { font-size: 13px; margin: 0 0 8px; letter-spacing: .04em; text-transform: uppercase; color: #5b6570; }
+  h2 { font-size: 11px; margin: 0 0 6px; letter-spacing: .06em; text-transform: uppercase; color: #5b6570; }
 
   .row { display: flex; gap: 6px; margin-bottom: 6px; }
   input[type=text], select, button {
-    background: #22262b; color: #e6e6e6; border: 1px solid #3a424b;
+    background: #fff; color: #1b1f24; border: 1px solid #c3c9d0;
     border-radius: 4px; padding: 5px 6px; font: inherit;
   }
   input[type=text] { flex: 1; min-width: 0; }
   select { width: 100%; }
   button { cursor: pointer; white-space: nowrap; }
-  button:hover { background: #2c323a; }
-  button:disabled { color: #5a636c; border-color: #2b3238; cursor: default; }
-  button:disabled:hover { background: #22262b; }
-  button.on { background: #23303a; border-color: #4cc9f0; color: #4cc9f0; }
-  button.wait { border-color: #f9c74f; color: #f9c74f; }
+  button:hover { background: #eef1f4; }
+  button:disabled { color: #a8b0b8; border-color: #dde1e6; cursor: default; }
+  button:disabled:hover { background: #fff; }
+  button.on { background: #e3f2fa; border-color: #0b7fab; color: #0b7fab; }
+  button.wait { border-color: #b8860b; color: #b8860b; }
   input[type=range] { width: 100%; }
 
   #loaded { color: #78828c; font-size: 11px; }
 
   #busy {
     width: 12px; height: 12px; flex: none; border-radius: 50%;
-    border: 2px solid #3a424b; border-top-color: #4cc9f0;
+    border: 2px solid #d7dbe0; border-top-color: #0b7fab;
     animation: spin .8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
   /* ---- workorder picker ---- */
-  #woSent { color: #78828c; font-size: 11px; min-height: 1.4em; }
+  #woSent { color: #5b6570; font-size: 11px; min-height: 1.4em; }
   #woDialog {
-    background: #181b1f; color: #e6e6e6; border: 1px solid #3a424b; border-radius: 6px;
+    background: #fff; color: #1b1f24; border: 1px solid #c3c9d0; border-radius: 6px;
     padding: 10px; min-width: 240px; font: inherit;
   }
-  #woDialog::backdrop { background: rgba(0, 0, 0, .5); }
+  #woDialog::backdrop { background: rgba(0, 0, 0, .35); }
   #woList { list-style: none; margin: 0 0 8px; padding: 0; max-height: 50vh; overflow-y: auto; }
   #woList li { padding: 5px 6px; border-radius: 4px; cursor: pointer; user-select: none; }
-  #woList li:hover { background: #22262b; }
-  #woList li.none { color: #78828c; cursor: default; }
+  #woList li:hover { background: #eef1f4; }
+  #woList li.none { color: #8a9199; cursor: default; }
   #woList li.none:hover { background: none; }
 
-  #status { color: #ff8080; font-size: 11px; }
+  #status { color: #b00020; font-size: 11px; }
   /* Top right: the sample the cursor sits on, then the button column. */
   .menu { display: flex; align-items: flex-start; gap: 6px; }
   .menu .stack { display: flex; flex-direction: column; }
   #sample {
     min-width: 160px; padding: 6px 8px; font-size: 12px; font-variant-numeric: tabular-nums;
-    background: rgba(34, 38, 43, .9); border: 1px solid #2b3238; border-radius: 4px;
+    background: rgba(255, 255, 255, .92); border: 1px solid #c3c9d0; border-radius: 4px;
   }
   #sample div { display: flex; justify-content: space-between; gap: 10px; }
-  #sample span { color: #9aa4ae; }
+  #sample span { color: #5b6570; }
 
   /* The map toolbar, top right: the menu button and the mower commands. */
   .menu .tools { display: flex; gap: 2px; }
@@ -106,23 +106,23 @@
   /* The menu button and whatever it has open share one box. */
   .menu .box {
     display: flex; flex-direction: column; padding: 2px;
-    background: #22262b; border: 1px solid #2b3238; border-radius: 4px;
+    background: rgba(255, 255, 255, .92); border: 1px solid #c3c9d0; border-radius: 4px;
   }
   .menu .box button { border: none; background: none; text-align: left; }
-  .menu .box button:hover { background: #2c323a; }
+  .menu .box button:hover { background: #eef1f4; }
   .menu .panel { display: flex; flex-direction: column; }
 
   /* The stock layer control is the menu's Layers panel: no box of its own. */
   .menu .leaflet-control-layers {
     margin: 0; padding: 4px 6px; background: none; border: none;
-    box-shadow: none; color: #e6e6e6;
+    box-shadow: none; color: #1b1f24;
   }
 
   /* The line colour key, floating over the bottom left corner of the map. */
   #legend {
     padding: 6px 8px; min-width: 120px; max-height: 40vh; overflow-y: auto;
-    background: rgba(34, 38, 43, .9); border: 1px solid #2b3238; border-radius: 4px;
-    color: #e6e6e6; font-size: 11px;
+    background: rgba(255, 255, 255, .92); border: 1px solid #c3c9d0; border-radius: 4px;
+    color: #1b1f24; font-size: 11px;
   }
   #legend .key { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
   #legend .key:last-child { margin-bottom: 0; }
@@ -135,7 +135,7 @@
   .marker.center { background: #43aa8b; }
   .marker.target { background: #f3722c; }
   .hidden { display: none !important; }
-  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #22262b; color: #e6e6e6; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #fff; color: #1b1f24; }
   .leaflet-popup-content { font-variant-numeric: tabular-nums; }
 </style>
 </head>
@@ -151,13 +151,13 @@
   <div id="map"></div>
   <div id="chart">
     <button id="earlier" title="Extend the window further back in time">&laquo;</button>
-    <div id="forward">
-      <button id="later" title="Extend the window further forward in time">&raquo;</button>
-      <button id="latest" title="Jump to the newest samples">&#9197;</button>
-    </div>
     <div id="chartTools">
       <button id="reloadBtn" title="Read the logs for this window again">&#8635;</button>
-      <button id="day" title="Show the last 24 hours and jump to the newest sample">24h</button>
+      <button id="later" title="Extend the window further forward in time">&raquo;</button>
+      <button id="latest" title="Jump to the newest samples">&#9197;</button>
+      <button id="h6" title="Show the last 6 hours and jump to the newest sample">6h</button>
+      <button id="h12" title="Show the last 12 hours and jump to the newest sample">12h</button>
+      <button id="h24" title="Show the last 24 hours and jump to the newest sample">24h</button>
     </div>
     <canvas id="chartCanvas"></canvas>
   </div>
@@ -180,7 +180,6 @@ function saveState() {
   const state = {
     known: OVERLAYS.map(o => o.name),
     layers: OVERLAYS.filter(o => map.hasLayer(o.layer)).map(o => o.name),
-    span: viewRange.t1 - viewRange.t0,
     colorBy: colorMode,
     channel: graphChannel
   };
@@ -291,7 +290,6 @@ addOverlay(woLayer, "Workorder", true);
 map.on("overlayadd overlayremove", saveState);
 
 const trackLayer  = L.layerGroup().addTo(map);   /* the coloured paths       */
-const eventLayer  = L.layerGroup().addTo(map);   /* bump / lift markers      */
 const markerLayer = L.layerGroup().addTo(map);   /* start, end, scrub cursor */
 
 /* ------------------------------------------------------ log file parsing -- */
@@ -436,19 +434,39 @@ function legendFor(mode, tracks) {
 /* --------------------------------------------------------------- tracks -- */
 /* One entry per known log file. rows === null until it has been loaded. */
 
-const TRACKS = [];             /* {key, name, url, file, rows, on} */
-let activeKey = null;          /* file the stats box and scrubber follow  */
+const TRACKS = [];             /* {key, name, url, rows, on} */
 
 /* The shown time window, which also decides which log files get loaded.
    Everything downstream — map, stats, scrubber, graph — works off view(). */
-const DEFAULT_SPAN_MS = 24 * 3600 * 1000;
-let viewRange = { t0: Date.now() - (STATE.span || DEFAULT_SPAN_MS), t1: Date.now() };
+const HOUR_MS = 3600000;
+let viewRange = { t0: Date.now() - 6 * HOUR_MS, t1: Date.now() };
 
 const inView = r => r.t != null && r.t >= viewRange.t0 && r.t <= viewRange.t1;
 const view = track => track.rows.filter(inView);
 
 /* Set when the next render should jump the cursor to the newest sample. */
 let selectEnd = false;
+
+/* Live: the end of the window follows the newest sample, the start stays put.
+   A window ending at or near the newest data is live, one ending well before it
+   is not, and in between the flag is left as it is. */
+const LIVE_NEAR_MS = 60000;
+const LIVE_AWAY_MS = 5 * 60000;
+
+let live = false;
+
+/* The newest sample the page holds, whatever file it came from. */
+function lastSample() {
+  let t = null;
+
+  for (const track of TRACKS) {
+    const rows = track.rows;
+    const last = rows && rows.length ? rows[rows.length - 1].t : null;
+
+    if (last != null && (t == null || last > t)) t = last;
+  }
+  return t;
+}
 
 /* Set while the directory listing is in flight; the files have their own flag. */
 let listing = false;
@@ -545,14 +563,6 @@ function drawTrack(track, rows, mode) {
   }
   flush(cur);
 
-  /* Bumper hits and lifts are worth seeing wherever they happened. */
-  for (const r of rows) {
-    if (r.bump) L.circleMarker([r.lat, r.lon], { radius: 5, color: "#f94144", weight: 2, fillOpacity: .6 })
-                  .bindPopup(popupHtml(r, track)).addTo(eventLayer);
-    if (r.lift) L.circleMarker([r.lat, r.lon], { radius: 5, color: "#b5179e", weight: 2, fillOpacity: .6 })
-                  .bindPopup(popupHtml(r, track)).addTo(eventLayer);
-  }
-
   const last = rows[rows.length - 1];
   L.circleMarker([last.lat, last.lon],
     { radius: 7, color: "#fff", weight: 2, fillColor: "#f94144", fillOpacity: 1 })
@@ -564,7 +574,6 @@ let fitted = false;   /* the map is fitted to the track once, when the page open
 
 function redraw(fit) {
   trackLayer.clearLayers();
-  eventLayer.clearLayers();
   markerLayer.clearLayers();
   cursorMarker = null;
 
@@ -652,7 +661,7 @@ const CHANNELS = {
 let graphChannel = CHANNELS[STATE.channel] ? STATE.channel : "soc";
 
 /* r keeps the axis and its end label clear of the buttons in the corner. */
-const PAD = { l: 42, r: 58, t: 8, b: 18 };
+const PAD = { l: 54, r: 38, t: 8, b: 18 };
 
 const chartCanvas = document.getElementById("chartCanvas");
 let chartIndex = 0;         /* row index the scrub cursor sits on       */
@@ -855,8 +864,17 @@ function scrubTo(x) {
 /* The one way the window ever changes: store it, then load whatever files it
    now reaches over. */
 function setRange(t0, t1) {
+  const last = lastSample();
+
   viewRange = { t0, t1 };
   selectEnd = true;
+  if (last == null) {
+    /* nothing loaded yet says nothing about the flag */
+  } else if (t1 >= last - LIVE_NEAR_MS) {
+    live = true;
+  } else if (t1 < last - LIVE_AWAY_MS) {
+    live = false;
+  }
   loadWindow();
 }
 
@@ -913,15 +931,18 @@ document.getElementById("later").addEventListener("click", () =>
    cursor on it. The mower clock runs ahead of this browser now and then, so a
    sample already shown past now still counts as the end. */
 function goLatest(span) {
-  const rows = windowRows();
-  const end = Math.max(Date.now(), rows.length ? rows[rows.length - 1].t : 0);
+  const end = Math.max(Date.now(), lastSample() || 0);
 
   setRange(end - span, end);
 }
 
 document.getElementById("latest").addEventListener("click", () => goLatest(viewRange.t1 - viewRange.t0));
 
-document.getElementById("day").addEventListener("click", () => goLatest(DEFAULT_SPAN_MS));
+document.getElementById("h6").addEventListener("click", () => goLatest(6 * HOUR_MS));
+
+document.getElementById("h12").addEventListener("click", () => goLatest(12 * HOUR_MS));
+
+document.getElementById("h24").addEventListener("click", () => goLatest(24 * HOUR_MS));
 
 document.getElementById("reloadBtn").addEventListener("click", reload);
 
@@ -942,47 +963,6 @@ async function fetchRows(track) {
   const res = await fetch(track.url, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
   return parseCsv(await res.text());
-}
-
-/* Only local files picked with Load file take this route; server logs follow
-   the window. */
-async function toggle(track) {
-  if (track.on) {                       /* clicking a shown file hides it */
-    track.on = false;
-    if (activeKey === track.key) activeKey = null;
-    redraw(false);
-    saveState();
-    return;
-  }
-
-  activeKey = track.key;
-
-  if (!track.rows) {
-    track.loading = true;
-    renderBusy();
-    say("Loading " + track.name + " …");
-    try {
-      const { rows, skipped, events } = await fetchRows(track);
-      track.loading = false;
-      woAdd(events, rows.length ? rows[0].t : null);
-      if (!rows.length) { say("No usable rows in " + track.name, true); renderBusy(); return; }
-      track.rows = rows;
-      say(`${track.name}: ${rows.length} samples` + (skipped ? `, ${skipped} rows skipped` : ""));
-    } catch (e) {
-      track.loading = false;
-      say("Could not load " + track.name + ": " + e.message, true);
-      renderBusy();
-      return;
-    }
-  }
-
-  track.on = true;
-  if (track.rows[0].t != null) {
-    viewRange = { t0: track.rows[0].t, t1: track.rows[track.rows.length - 1].t };
-  }
-  selectEnd = true;                     /* a freshly shown file opens at its newest sample */
-  redraw(true);
-  saveState();
 }
 
 /* mowerlog_YYYYMMDD_HH_MM_SS.csv, named in UTC when the file was started. */
@@ -1047,8 +1027,6 @@ async function loadWindow(refetch) {
     t.on = !!(t.rows && t.rows.length);
   }
 
-  const newest = want.find(t => t.on);
-  if (newest) activeKey = newest.key;
   redraw(true);
   saveState();
 }
@@ -1256,19 +1234,17 @@ function liveAppend(rows) {
   if (!fresh.length) return false;
 
   const wasLast = chartIndex >= windowRows().length - 1;
-  const atEnd = !!last && last.t != null && viewRange.t1 >= last.t;
   const newest = fresh[fresh.length - 1].t;
 
   target.rows.push(...fresh);
 
-  /* A window sitting on the end of the log would otherwise keep showing the same
-     samples while new ones pile up past its right edge. Slide the whole window
-     up to the newest sample so its span still holds. */
-  if (wasLast && atEnd && newest > viewRange.t1) {
-    viewRange = { t0: newest - (viewRange.t1 - viewRange.t0), t1: newest };
+  /* Live, so the window grows at its right edge rather than leaving the new
+     samples outside it. */
+  if (live && newest != null && newest > viewRange.t1) {
+    viewRange = { t0: viewRange.t0, t1: newest };
   }
 
-  selectEnd = wasLast;
+  selectEnd = live || wasLast;   /* live keeps the cursor on the newest sample */
   return true;
 }
 
@@ -1305,6 +1281,17 @@ function liveConnect() {
     if (liveOn) liveRetry = setTimeout(liveConnect, LIVE_RETRY_MS);
     liveButton();
   };
+}
+
+/* Going live takes the flag with it, so the window end follows the feed, and
+   arms the reload for when the rsync has caught up with what the feed brought. */
+function liveStart() {
+  liveOn = true;
+  live = true;
+  clearTimeout(liveReload);
+  liveConnect();
+  liveReload = setTimeout(reload, LIVE_RELOAD_MS);
+  liveButton();
 }
 
 function liveDisconnect() {
@@ -1534,20 +1521,19 @@ document.getElementById("abort").addEventListener("click", () => woSend(2, ""));
 
 document.getElementById("woCancel").addEventListener("click", () => woDialog.close());
 
-/* Switching live on takes what the server holds right now, and once more when the
-   rsync has caught up with the samples the feed delivered in the meantime. */
+/* The button means "follow the mower": it only switches off when it is already
+   following, so a press after scrolling back into the past resumes instead. It
+   takes what the server holds right now as well. */
 document.getElementById("live").addEventListener("click", () => {
-  liveOn = !liveOn;
-  clearTimeout(liveReload);
-
-  if (liveOn) {
-    liveConnect();
-    reload();
-    liveReload = setTimeout(reload, LIVE_RELOAD_MS);
-  } else {
+  if (liveOn && live) {
+    liveOn = false;
+    clearTimeout(liveReload);
     liveDisconnect();
+    liveButton();
+  } else {
+    liveStart();
+    reload();
   }
-  liveButton();
 });
 
 /* Left / right arrow steps the scrub cursor one sample, unless a form control
@@ -1564,26 +1550,16 @@ document.addEventListener("keydown", e => {
 });
 
 /* ----------------------------------------------------------- start-up ---- */
-/* ?log=<name> shows exactly those logs and takes its window from them; without
-   it the window decides, and it opens on the last 24 hours. */
-
-
-const startTracks = new URLSearchParams(location.search).getAll("log")
-  .map(name => addTrack({ key: WORKLOG_DIR + name, name, url: WORKLOG_DIR + name }));
-renderBusy();
+/* The window decides which logs are read. A fresh page opens on the last six
+   hours and goes live, so it needs no reload of its own. */
 
 (async () => {
   listing = true;
   renderBusy();
   await listDirectory();
   listing = false;
-
-  if (startTracks.length) {
-    for (const t of startTracks) await toggle(t);
-  } else {
-    await loadWindow();
-  }
-
+  await loadWindow();
+  liveStart();
   await loadLayers();
 })();
 </script>
