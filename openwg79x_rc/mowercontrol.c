@@ -25,7 +25,16 @@
 #define MM_PER_DEGREE 111320000.0
 #define AT_POINT_MM 500
 #define MIN_HEADING_MM 1000
+#define STRAIGHT_WHEEL_DIFF 5
 #define RUN_SPEED 50
+#define MOWLINE_ON_LINE_MM 1000
+#define PID_KP 0.02
+#define PID_KI 0.0
+#define PID_KD 0.3
+#define PID_MAX_DIFF 25
+#define PID_MAX_INTEGRAL 10000.0
+#define PID_SEND_STEP 2
+#define PID_PERIOD_MS 300
 #define TARGET_BEHIND_DEG 90.0
 #define OFF_COURSE_DEG 10.0
 #define TURN_START_MS 1000
@@ -35,7 +44,7 @@
 #define COLLISION_TURN_DEG 90
 #define POLYGON_MAX_POINTS 32
 #define MOW_RESUME_MS 5000
-#define MOW_RESEND_MS 3000
+#define MOW_RESEND_MS 5000
 #define LINE_MAX_POINTS 32
 #define DIRECTION_PRINT_MS 1000
 #define DISC_SPEED 50
@@ -55,6 +64,9 @@ typedef enum {
 	mctr_collision_turn_away,
 	mctr_collision_forward,
 	mctr_collision_turn_back,
+	mctr_mow_line_start,
+	mctr_mow_line_go,
+	mctr_mow_line_run,
 	mctr_mow,
 	mctr_mow_polygon,
 	mctr_mow_outside_run,
@@ -78,6 +90,12 @@ static bool collision_turn_left;	/* which way the detour goes */
 static point_t polygon[POLYGON_MAX_POINTS];
 static int polygon_points;
 static point_t mow_center;
+static point_t mowline_start;
+static point_t mowline_end;
+static double pid_integral;
+static int pid_last_error;
+static int pid_left;
+static int pid_right;
 static long long mow_deadline;
 static FILE *wo_file;
 static char wo_line[WO_LINE_MAX];
@@ -268,7 +286,7 @@ void mowercontrol_input_mowercom(uint8_t msgid, const uint8_t *msgbuf)
 {
 	if (msgid == MSG_MOWER_STATUS) {
 		memcpy(&status, msgbuf, sizeof(status));
-		if (status.left_wheel_speed != status.right_wheel_speed || status.left_wheel_speed < 0) {
+		if (abs(status.left_wheel_speed - status.right_wheel_speed) > STRAIGHT_WHEEL_DIFF || status.left_wheel_speed < 0) {
 			gga_log_count = 0;
 		}
 		logf(INFO, "status: state %u wheels %d/%d bump %u lift %u wire %u%u%u soc %u\n", status.state, status.left_wheel_speed, status.right_wheel_speed, (status.sensor_status >> 0) & 1, (status.sensor_status >> 1) & 1, (status.wire_sensor_status >> 0) & 1, (status.wire_sensor_status >> 1) & 1, (status.wire_sensor_status >> 2) & 1, status.battery_soc);
@@ -466,7 +484,69 @@ static double bearing_between_points(const point_t *from, const point_t *to)
 	return atan2(dlon, dlat) * 180.0 / M_PI;
 }
 
+/* Millimetres from the line a->b, positive when pos is left of it */
+static int distance_to_line(const point_t *pos, const point_t *a, const point_t *b)
+{
+	double bx, by, px, py, len;
+
+	bx = (b->lon - a->lon) * MM_PER_DEGREE * cos(a->lat * M_PI / 180.0);
+	by = (b->lat - a->lat) * MM_PER_DEGREE;
+	px = (pos->lon - a->lon) * MM_PER_DEGREE * cos(a->lat * M_PI / 180.0);
+	py = (pos->lat - a->lat) * MM_PER_DEGREE;
+	len = sqrt(bx * bx + by * by);
+
+	if (len < 1.0) {
+		return 0;
+	}
+
+	return (int)((bx * py - by * px) / len);
+}
+
+/* The point on a->b nearest pos, never past either end */
+static point_t point_on_line(const point_t *pos, const point_t *a, const point_t *b)
+{
+	point_t foot;
+	double bx, by, px, py, len2, t;
+
+	bx = (b->lon - a->lon) * MM_PER_DEGREE * cos(a->lat * M_PI / 180.0);
+	by = (b->lat - a->lat) * MM_PER_DEGREE;
+	px = (pos->lon - a->lon) * MM_PER_DEGREE * cos(a->lat * M_PI / 180.0);
+	py = (pos->lat - a->lat) * MM_PER_DEGREE;
+	len2 = bx * bx + by * by;
+	t = (len2 > 0.0) ? (px * bx + py * by) / len2 : 0.0;
+
+	if (t < 0.0) {
+		t = 0.0;
+	} else if (t > 1.0) {
+		t = 1.0;
+	}
+
+	foot.lat = a->lat + (b->lat - a->lat) * t;
+	foot.lon = a->lon + (b->lon - a->lon) * t;
+
+	return foot;
+}
+
 /* cmd_id 8: numpoints, targetpoint, then 4 fields per point */
+/* cmd_id 9: start point, end point, collision_handling */
+static void wo_cmd_mow_line(void)
+{
+	char lat1[16], ns1[2], lon1[16], ew1[2], lat2[16], ns2[2], lon2[16], ew2[2];
+	int stop_on_bump = 0;
+
+	if (sscanf(wo_line, "%*d,%15[^,],%1[^,],%15[^,],%1[^,],%15[^,],%1[^,],%15[^,],%1[^,\r\n],%d", lat1, ns1, lon1, ew1, lat2, ns2, lon2, ew2, &stop_on_bump) < 8) {
+		logf(INFO, "cmd mow line: bad row\n");
+		return;
+	}
+
+	mowline_start = nmea_to_point(lat1, ns1, lon1, ew1);
+	mowline_end = nmea_to_point(lat2, ns2, lon2, ew2);
+	wo_stop_on_bump = stop_on_bump != 0;
+	disc_speed = DISC_SPEED;
+	logf(INFO, "cmd mow line: %.7f %.7f to %.7f %.7f, %s obstacles\n", mowline_start.lat, mowline_start.lon, mowline_end.lat, mowline_end.lon, wo_stop_on_bump ? "stop on" : "go around");
+	mctrstate = mctr_mow_line_start;
+}
+
 static void wo_cmd_follow_line(void)
 {
 	const char *field = wo_line;
@@ -562,6 +642,7 @@ void mowercontrol_execute()
 {
 	point_t pos;
 	double turn, direction;
+	int error, diff, left, right;
 	int wo_cmd_id;
 
 	if(status.state < STATE_RC_MIN || status.state > STATE_RC_MAX) {
@@ -613,6 +694,9 @@ void mowercontrol_execute()
 					break;
 				case 8:
 					wo_cmd_follow_line();
+					break;
+				case 9:
+					wo_cmd_mow_line();
 					break;
 			}
 			break;
@@ -818,6 +902,74 @@ void mowercontrol_execute()
 			} else if (now_ms() >= state_deadline) {
 				logf(INFO, "collision: turn never reported, carrying on\n");
 				turn_started = true;
+			}
+			break;
+		case mctr_mow_line_start:
+			pos = gga_log[gga_log_pos];
+			error = distance_to_line(&pos, &mowline_start, &mowline_end);
+			wo_target = point_on_line(&pos, &mowline_start, &mowline_end);
+			mctrstate_after_pointfound = mctr_mow_line_go;
+			if (abs(error) > MOWLINE_ON_LINE_MM) {
+				logf(INFO, "mow line: %d mm off the line, closing on it\n", error);
+				mctrstate = mctr_run_to_point_start;
+			} else {
+				mctrstate = mctr_mow_line_go;
+			}
+			break;
+		case mctr_mow_line_go:
+			pos = gga_log[gga_log_pos];
+			logf(INFO, "mow line: %d mm off the line, running at speed %d\n", distance_to_line(&pos, &mowline_start, &mowline_end), RUN_SPEED);
+			mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ RUN_SPEED, RUN_SPEED, disc_speed, 0 }, 4);
+			pid_integral = 0.0;
+			pid_last_error = distance_to_line(&pos, &mowline_start, &mowline_end);
+			pid_left = RUN_SPEED;
+			pid_right = RUN_SPEED;
+			state_deadline = now_ms() + PID_PERIOD_MS;
+			mctrstate = mctr_mow_line_run;
+			break;
+		case mctr_mow_line_run:
+			pos = gga_log[gga_log_pos];
+			if (collision_detected(&collision_type)) {
+				if (wo_stop_on_bump) {
+					mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4);
+					mctrstate = mctr_read_wo_line;
+				} else {
+					mctrstate = mctr_collision_detected;
+					mctrstate_after_collision = mctr_mow_line_start;
+				}
+				break;
+			}
+			if (distance_between_points(&pos, &mowline_end) < AT_POINT_MM) {
+				logf(INFO, "mow line: at the end, %d mm to go\n", distance_between_points(&pos, &mowline_end));
+				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ 0, 0, 0, 0 }, 4);
+				mctrstate = mctr_read_wo_line;
+				break;
+			}
+			if (now_ms() < state_deadline) {
+				break;
+			}
+			state_deadline = now_ms() + PID_PERIOD_MS;
+			error = distance_to_line(&pos, &mowline_start, &mowline_end);
+			pid_integral += error;
+			if (pid_integral > PID_MAX_INTEGRAL) {
+				pid_integral = PID_MAX_INTEGRAL;
+			} else if (pid_integral < -PID_MAX_INTEGRAL) {
+				pid_integral = -PID_MAX_INTEGRAL;
+			}
+			diff = (int)(PID_KP * error + PID_KI * pid_integral + PID_KD * (error - pid_last_error));
+			pid_last_error = error;
+			if (diff > PID_MAX_DIFF) {
+				diff = PID_MAX_DIFF;
+			} else if (diff < -PID_MAX_DIFF) {
+				diff = -PID_MAX_DIFF;
+			}
+			left = (diff < 0) ? RUN_SPEED + diff : RUN_SPEED;
+			right = (diff > 0) ? RUN_SPEED - diff : RUN_SPEED;
+			if (abs(left - pid_left) >= PID_SEND_STEP || abs(right - pid_right) >= PID_SEND_STEP) {
+				logf(INFO, "mow line: %d mm off the line, wheels %d/%d\n", error, left, right);
+				mowercom_send(MSG_REMOTE_CONTROL_RUN, (int8_t[]){ left, right, disc_speed, 0 }, 4);
+				pid_left = left;
+				pid_right = right;
 			}
 			break;
 		case mctr_mow:

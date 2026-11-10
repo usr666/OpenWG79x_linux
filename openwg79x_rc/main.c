@@ -222,6 +222,12 @@ int main(int argc, char **argv)
 			if(msgid == MSG_MOWER_STATUS) {
 				memcpy(&status, msgbuf, sizeof(status));
 				log_sample();
+			} else if (msgid == MSG_COMM_DEBUG && len == sizeof(msg_comm_debug_t)) {
+				msg_comm_debug_t *d = (msg_comm_debug_t *)msgbuf;
+
+				logf(INFO, "mower comm: frames received %u, crc errors %u, uart overruns %u, framing errors %u\n", d->frames_received, d->crc_errors, d->uart_overruns, d->framing_errors);
+			} else {
+				logf(WARN, "mowercom: unhandled msg id 0x%02X len %zu\n", msgid, len);
 			}
 		} else if (i < 0) {
 			logf(INFO, "mower uart lost\n");

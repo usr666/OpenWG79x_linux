@@ -307,6 +307,7 @@ async function loadLayers() {
    file order, so a row is just [cmd, …field values]. */
 
 const YESNO = [["0", "no"], ["1", "yes"]];
+const COLLISION = [["0", "go around"], ["1", "stop"]];
 const EVENTS = [["0", "timeout only"], ["1", "turn complete"], ["2", "rtk float or fix"], ["3", "rtk fix"]];
 
 const COMMANDS = [
@@ -332,7 +333,7 @@ const COMMANDS = [
     { key: "ns",  label: "N/S",       type: "sel", options: [["N", "N"], ["S", "S"]], def: "N" },
     { key: "lon", label: "Longitude", type: "text", def: "" },
     { key: "ew",  label: "E/W",       type: "sel", options: [["E", "E"], ["W", "W"]], def: "E" },
-    { key: "coll", label: "Collision", type: "sel", options: [["0", "go around"], ["1", "stop"]], def: "0" }
+    { key: "coll", label: "Collision", type: "sel", options: COLLISION, def: "0" }
   ]},
   { id: 5, name: "Mow", fields: [
     { key: "time", label: "Mow time s", type: "num", min: 0, max: 65535, def: 600 }
@@ -341,7 +342,10 @@ const COMMANDS = [
   { id: 7, name: "Mow within polygon", poly: true, fields: [
     { key: "time", label: "Mow time s", type: "num", min: 0, max: 65535, def: 600 }
   ]},
-  { id: 8, name: "Follow line", line: true, fields: [] }
+  { id: 8, name: "Follow line", line: true, fields: [] },
+  { id: 9, name: "Mow along line", pair: true, fields: [
+    { key: "coll", label: "Collision", type: "sel", options: COLLISION, def: "0" }
+  ]}
 ];
 
 const byId = id => COMMANDS.find(c => c.id === id);
@@ -387,9 +391,9 @@ function openBlock(block) {
   for (const b of document.querySelectorAll("#commands .cmd")) b.classList.toggle("open", b === block);
 }
 
-const openCmd = () => [...COMMANDS, MOW_AREA].find(c => c.block && c.block.classList.contains("open"));
+const openCmd = () => [...COMMANDS, MOW_AREA, MOW_AREA_LINE].find(c => c.block && c.block.classList.contains("open"));
 
-const picking = cmd => !!(cmd && (cmd.poly || cmd.line || cmd.mow));
+const picking = cmd => !!(cmd && (cmd.poly || cmd.line || cmd.pair || cmd.mow));
 
 const fieldEl = (cmd, f) => document.getElementById(`f${cmd.id}_${f.key}`);
 
@@ -437,6 +441,7 @@ function describe(row) {
     case 6: return "go to charge";
     case 7: return `mow polygon of ${v[5]} corners, ${v[0]}s`;
     case 8: return `follow line of ${v[0]} points to point ${v[1]}`;
+    case 9: return `mow line ${v[0]}${v[1]} ${v[2]}${v[3]} to ${v[4]}${v[5]} ${v[6]}${v[7]}${v[8] === "1" ? ", stop on collision" : ""}`;
   }
   return "";
 }
@@ -482,7 +487,7 @@ function select(i) {
   selected = i;
 
   const row = rows[i];
-  if (row && !row.raw) { setFields(byId(row.cmd), row.values); openBlock(byId(row.cmd).block); }
+  if (row && !row.raw) { setFields(byId(row.cmd), row.values.slice(fieldAt(byId(row.cmd)))); openBlock(byId(row.cmd).block); }
   renderRows();
 }
 
@@ -491,19 +496,22 @@ function change() {
   renderRows();
 }
 
+const fieldAt = cmd => cmd.pair ? 8 : 0;   /* a mow along line row carries its field after the two points */
+
 /* The rows a block stands for: the picking blocks stand for the points clicked
    on the map, every other block for its fields. Null means too few points. */
 function blockRows(cmd, values) {
   const n = pick.cmd === cmd ? pick.pts.length : 0;
   const points = pick.cmd === cmd ? pick.pts.flatMap(polyFields) : [];
 
-  if (cmd.mow) { return n === 4 ? mowAreaRows(pick.pts) : null; }
+  if (cmd.mow) { return n === 4 ? cmd.mow(pick.pts) : null; }
+  if (cmd.pair) { return n === 2 ? [{ cmd: cmd.id, values: [...points, values[0]] }] : null; }
   if (cmd.poly) { return n < 3 || n > PICK_MAX ? null : [{ cmd: cmd.id, values: [values[0], ...polyFields(polyCentre(pick.pts)), String(n), ...points] }]; }
   if (cmd.line) { return n < 2 || n > PICK_MAX ? null : [{ cmd: cmd.id, values: [String(n), String(n), ...points] }]; }
   return [{ cmd: cmd.id, values }];
 }
 
-const pickHint = cmd => cmd.mow ? "Click the 4 corners of the area on the map first" : `Click ${cmd.poly ? 3 : 2} to ${PICK_MAX} points on the map first`;
+const pickHint = cmd => cmd.mow ? "Click the 4 corners of the area on the map first" : cmd.pair ? "Click the start and the end of the line on the map first" : `Click ${cmd.poly ? 3 : 2} to ${PICK_MAX} points on the map first`;
 
 function insertRow(cmd) {
   const values = getFields(cmd);
@@ -535,7 +543,7 @@ function replaceRow(cmd) {
   if (!made && row.cmd !== cmd.id) { say(pickHint(cmd), true); return; }
 
   if (made) { rows.splice(selected, 1, ...made); }
-  else { cmd.fields.forEach((f, i) => { row.values[i] = values[i]; }); }
+  else { cmd.fields.forEach((f, i) => { row.values[fieldAt(cmd) + i] = values[i]; }); }
   if (cmd.point) { point.lat = ""; }
   pick.pts = [];
   say("");
@@ -673,6 +681,25 @@ function marker(latlng, text, cls, draggable) {
   });
 }
 
+/* A mowed line is its two ends; the selected one gets a handle on each. */
+function drawMowLine(row, i) {
+  const v = row.values;
+  const pts = [atLatLng(v, 0), atLatLng(v, 4)];
+
+  L.polyline(pts, { color: i === selected ? "#f9c74f" : "#43aa8b", weight: 2, opacity: .9 }).addTo(pathLayer);
+  if (i !== selected) { return; }
+
+  pts.forEach((ll, k) => {
+    const m = marker(ll, k + 1, "on", true);
+
+    m.on("dragend", () => {
+      v.splice(k * 4, 4, ...polyFields(m.getLatLng()));
+      change();
+    });
+    m.addTo(pathLayer);
+  });
+}
+
 function drawPoints() {
   const coords = [];
 
@@ -697,6 +724,7 @@ function drawPoints() {
   if (coords.length > 1) L.polyline(coords, { color: "#4cc9f0", weight: 2, opacity: .8, dashArray: "4 4" }).addTo(pathLayer);
   rows.forEach((row, i) => { if (!row.raw && row.cmd === 7) drawPolygon(row, i); });
   rows.forEach((row, i) => { if (!row.raw && row.cmd === 8) drawLine(row, i); });
+  rows.forEach((row, i) => { if (!row.raw && row.cmd === 9) drawMowLine(row, i); });
   if (point.lat) marker(L.latLng(degrees(point.lat, point.ns), degrees(point.lon, point.ew)), "", "pending", false).addTo(pathLayer);
   pick.pts.forEach((ll, i) => marker(ll, i + 1, "pending", false).addTo(pathLayer));
 }
@@ -706,18 +734,18 @@ function drawPoints() {
 map.on("click", e => picking(openCmd()) ? pickClick(e.latlng) : pointFields(e.latlng));
 
 /* ----------------------------------------------------------- mow area -- */
-/* Four corners clicked in order round the area. The mower drives p1-p2, steps
-   sideways at the p2 end, drives back to a point one spacing further along
-   p1-p4, steps sideways at the p1 end, and so on until a rail runs out. Every
-   sideways step is turn 90, run, turn 90 the same way - the rows a hand
-   written workorder would use, so nothing new is asked of the mower. */
+/* Four corners clicked in order round the area, mowed in two ways. Mow area
+   drives every rail end as a run to point; mow area along line mows each rail as
+   one mow along line row, where the sideways step carries the mower the one
+   spacing across, so the next rail starts where that step ends. Both step with
+   turn 90, run, turn 90. */
 
 const MOW_STEP_M = 0.20;
 const MOW_RUN_SPEED = 30;
 const MOW_TURN_SPEED = 0;      /* 0 turns on the spot, which is the exact 90 */
 const MOW_TURN_TIMEOUT = 10;
 const MOW_DISC_SPEED = 50;
-const MOW_BACK_SPEED = -50;     /* reversed for a moment at every point reached */
+const MOW_BACK_SPEED = -30;     /* reversed for a moment at every point reached */
 const MOW_BACK_TIME = 1;
 
 const M_PER_DEG = 111320;
@@ -749,6 +777,7 @@ function mowAreaRows([p1, p2, p3, p4]) {
     out.push({ cmd: 4, values: [nmea(ll.lat, 2), ll.lat < 0 ? "S" : "N", nmea(ll.lng, 3), ll.lng < 0 ? "W" : "E", "1"] });
     out.push({ cmd: 1, values: [String(MOW_BACK_SPEED), String(MOW_BACK_SPEED), String(MOW_DISC_SPEED), "1"] });
     out.push({ cmd: 3, values: ["0", String(MOW_BACK_TIME)] });
+    out.push({ cmd: 1, values: ["0", "0", String(MOW_DISC_SPEED), "0"] });   /* a lost turn then stands still instead of reversing on */
   };
   const addTurn = dir => {
     out.push({ cmd: 2, values: [String(MOW_TURN_SPEED), "90", dir, String(MOW_DISC_SPEED), "1"] });
@@ -773,23 +802,61 @@ function mowAreaRows([p1, p2, p3, p4]) {
   return out;
 }
 
-const MOW_AREA = { name: "Mow area", mow: true, fields: [] };
+function mowAreaLineRows([p1, p2, p3, p4]) {
+  const out = [];
+  const dirP2 = turnDir(bearing(p1, p2), bearing(p2, p3));   /* at the p2 end, towards p3 */
+  const dirP1 = turnDir(bearing(p2, p1), bearing(p1, p4));   /* at the p1 end, towards p4 */
+  const rails = Math.floor(Math.min(metres(p1, p4), metres(p2, p3)) / MOW_STEP_M);
+  const p1Side = k => along(p1, p4, k * MOW_STEP_M);         /* k spacings in along p1-p4 */
+  const p2Side = k => along(p2, p3, k * MOW_STEP_M);         /* k spacings in along p2-p3 */
 
-function buildMowArea() {
+  const addLine = (from, to) => {
+    out.push({ cmd: 9, values: [...polyFields(from), ...polyFields(to), "1"] });
+    out.push({ cmd: 1, values: [String(MOW_BACK_SPEED), String(MOW_BACK_SPEED), String(MOW_DISC_SPEED), "1"] });
+    out.push({ cmd: 3, values: ["0", String(MOW_BACK_TIME)] });
+    out.push({ cmd: 1, values: ["0", "0", String(MOW_DISC_SPEED), "0"] });   /* a lost turn then stands still instead of reversing on */
+  };
+  const addTurn = dir => {
+    out.push({ cmd: 2, values: [String(MOW_TURN_SPEED), "90", dir, String(MOW_DISC_SPEED), "1"] });
+    out.push({ cmd: 3, values: ["1", String(MOW_TURN_TIMEOUT)] });
+  };
+  const addStep = dir => {
+    addTurn(dir);
+    out.push({ cmd: 1, values: [String(MOW_RUN_SPEED), String(MOW_RUN_SPEED), String(MOW_DISC_SPEED), "0"] });
+    out.push({ cmd: 3, values: ["0", "1"] });
+    addTurn(dir);
+  };
+
+  out.push({ cmd: 1, values: ["0", "0", String(MOW_DISC_SPEED), "0"] });   /* the disc the mow along line rows inherit */
+  addLine(p1, p2);
+  for (let k = 1; k <= rails; k++) {
+    const back = k % 2;                                      /* odd rails run back towards the p1-p4 side */
+
+    addStep(back ? dirP2 : dirP1);
+    addLine(back ? p2Side(k) : p1Side(k), back ? p1Side(k) : p2Side(k));
+  }
+  return out;
+}
+
+const MOW_AREA = { name: "Mow area", mow: mowAreaRows, fields: [] };
+
+const MOW_AREA_LINE = { name: "Mow area along line", mow: mowAreaLineRows, fields: [] };
+
+function buildMowArea(area) {
   const block = document.createElement("div");
 
   block.className = "cmd";
-  block.innerHTML = `<h2>Mow area</h2>`
+  block.innerHTML = `<h2>${area.name}</h2>`
     + `<div class="field"><label>Row spacing</label><span>${MOW_STEP_M * 100} cm</span></div>`
     + `<div class="row"><button>Insert</button><button>Replace</button></div>`;
 
   const buttons = block.querySelectorAll("button");
 
   document.getElementById("commands").appendChild(block);
-  buttons[0].addEventListener("click", () => insertRow(MOW_AREA));
-  buttons[1].addEventListener("click", () => replaceRow(MOW_AREA));
+  buttons[0].addEventListener("click", () => insertRow(area));
+  buttons[1].addEventListener("click", () => replaceRow(area));
   block.querySelector("h2").addEventListener("click", () => openBlock(block));
-  MOW_AREA.block = block;
+  area.block = block;
 }
 
 /* --------------------------------------------------------------- file -- */
@@ -798,6 +865,7 @@ function buildMowArea() {
 
 const WORKORDER_DIR = "workorder/";
 const HEADER = "#version 1\n";
+const NAME_MAX = 31;   /* the mower reads at most this many characters of the name */
 
 const loadDialog = document.getElementById("loadDialog");
 const delDialog = document.getElementById("delDialog");
@@ -816,6 +884,7 @@ function setFile(name, text) {
 
     const want = cmd && cmd.poly ? 7 + 4 * (+f[6] || 0)
                : cmd && cmd.line ? 3 + 4 * (+f[1] || 0)
+               : cmd && cmd.pair ? 9 + cmd.fields.length
                : cmd && cmd.fields.length + 1;
 
     if (!s || s.startsWith("#")) continue;
@@ -971,6 +1040,7 @@ function saveAs() {
 
   if (name === null) return;
   if (!/^[A-Za-z0-9_-]+$/.test(name)) { say("A workorder name may hold a-z A-Z 0-9 _- only", true); return; }
+  if (name.length > NAME_MAX) { say(`A workorder name may hold at most ${NAME_MAX} characters`, true); return; }
   saveFile(name);
 }
 
@@ -1009,7 +1079,8 @@ addEventListener("beforeunload", e => { if (dirty) e.preventDefault(); });
 /* ----------------------------------------------------------- start-up -- */
 
 buildCommands();
-buildMowArea();
+buildMowArea(MOW_AREA);
+buildMowArea(MOW_AREA_LINE);
 setFile("", "");
 loadLayers();
 </script>

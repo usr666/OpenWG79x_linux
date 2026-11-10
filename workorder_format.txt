@@ -70,3 +70,15 @@ latitude_nmea          verbatim NMEA ddmm.mmmmm; deg = floor(v/100), decimal = d
 latitude_hemisphere    N or S; S is negative
 longitude_nmea         verbatim NMEA dddmm.mmmmm; converted as latitude_nmea
 longitude_hemisphere   E or W; W is negative
+
+Mow along line
+cmd_id                 9
+start_latitude_nmea          verbatim NMEA ddmm.mmmmm; deg = floor(v/100), decimal = deg + (v - deg*100)/60
+start_latitude_hemisphere    N or S; S is negative
+start_longitude_nmea         verbatim NMEA dddmm.mmmmm; converted as latitude_nmea
+start_longitude_hemisphere   E or W; W is negative
+end_latitude_nmea            verbatim NMEA ddmm.mmmmm; deg = floor(v/100), decimal = deg + (v - deg*100)/60
+end_latitude_hemisphere      N or S; S is negative
+end_longitude_nmea           verbatim NMEA dddmm.mmmmm; converted as latitude_nmea
+end_longitude_hemisphere     E or W; W is negative
+collision_handling           0=go around obstacles, 1=stop when hitting obstacles

@@ -290,7 +290,7 @@ addOverlay(woLayer, "Workorder", true);
 map.on("overlayadd overlayremove", saveState);
 
 const trackLayer  = L.layerGroup().addTo(map);   /* the coloured paths       */
-const markerLayer = L.layerGroup().addTo(map);   /* start, end, scrub cursor */
+const markerLayer = L.layerGroup().addTo(map);   /* the scrub cursor            */
 
 /* ------------------------------------------------------ log file parsing -- */
 /* Format per logformat.txt. Rows starting with # are ignored, an empty field
@@ -444,12 +444,14 @@ let viewRange = { t0: Date.now() - 6 * HOUR_MS, t1: Date.now() };
 const inView = r => r.t != null && r.t >= viewRange.t0 && r.t <= viewRange.t1;
 const view = track => track.rows.filter(inView);
 
-/* Set when the next render should jump the cursor to the newest sample. */
-let selectEnd = false;
+/* The sample the cursor sits on. null follows the newest sample there is, which
+   is what live does; picking one holds it, whatever loads or arrives. */
+let cursorTime = null;
 
 /* Live: the end of the window follows the newest sample, the start stays put.
-   A window ending at or near the newest data is live, one ending well before it
-   is not, and in between the flag is left as it is. */
+   Going live is the Live button, a workorder, the span buttons, and a zoom that
+   ends at or near the newest data; a zoom ending well before it drops out of
+   live, as does picking a sample. Everything else leaves the flag alone. */
 const LIVE_NEAR_MS = 60000;
 const LIVE_AWAY_MS = 5 * 60000;
 
@@ -526,20 +528,7 @@ const stamp  = r => {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${hhmmss(r.t)}`;
 };
 
-function popupHtml(r, track) {
-  return [
-    `<b>${track.name}</b>`,
-    stamp(r),
-    `${r.lat.toFixed(7)}, ${r.lon.toFixed(7)}`,
-    `${stateName(r.state)} &middot; battery ${r.soc ?? "?"} %`,
-    `fix ${r.fix_quality ?? "?"} / mode ${r.fix_mode ?? "?"} &middot; ${r.sats ?? "?"} sats` +
-      ` &middot; HDOP ${r.hdop ?? "?"}`,
-    `wire L/R ${r.wire_left ?? "?"}/${r.wire_right ?? "?"} &middot; near ${r.near_wire ?? "?"}` +
-      `${r.bump ? " &middot; <b>bump</b>" : ""}${r.lift ? " &middot; <b>lift</b>" : ""}`
-  ].join("<br>");
-}
-
-function drawTrack(track, rows, mode) {
+function drawTrack(rows, mode) {
   const color = colorFn(mode, rows);
 
   /* One polyline per run of same-coloured samples, so a 10k sample log stays
@@ -562,11 +551,6 @@ function drawTrack(track, rows, mode) {
     else pts.push(r);
   }
   flush(cur);
-
-  const last = rows[rows.length - 1];
-  L.circleMarker([last.lat, last.lon],
-    { radius: 7, color: "#fff", weight: 2, fillColor: "#f94144", fillOpacity: 1 })
-    .bindPopup("<b>End</b><br>" + popupHtml(last, track)).addTo(markerLayer);
 }
 
 let cursorMarker = null;
@@ -582,7 +566,7 @@ function redraw(fit) {
   const drawn = [];
   for (const t of shown) {
     const rows = view(t);                  /* only the selected time window */
-    if (rows.length > 1) { drawTrack(t, rows, mode); drawn.push(rows); }
+    if (rows.length > 1) { drawTrack(rows, mode); drawn.push(rows); }
   }
 
   const legend = document.getElementById("legend");
@@ -610,7 +594,6 @@ function renderBusy() {
   liveButton();   /* which file live samples would go to may have just changed */
 }
 
-/* The cursor follows the newest sample until the user moves it. */
 function renderCursor() {
   const rows = windowRows();
 
@@ -620,9 +603,28 @@ function renderCursor() {
     return;
   }
 
-  if (selectEnd || chartIndex > rows.length - 1) { chartIndex = rows.length - 1; }
-  selectEnd = false;
-  updateCursor(chartIndex);
+  updateCursor(cursorTime == null ? rows.length - 1 : nearest(rows, cursorTime));
+}
+
+/* Which row a moment lands on. Row numbers shift as files load, so the picked
+   sample is found again by its time. */
+function nearest(rows, t) {
+  let best = 0;
+
+  for (let i = 1; i < rows.length; i++) {
+    if (Math.abs(rows[i].t - t) < Math.abs(rows[best].t - t)) { best = i; }
+  }
+  return best;
+}
+
+/* The user picked a sample: it stays picked, and the window stops following. */
+function pickCursor(i) {
+  const r = windowRows()[i];
+
+  if (!r) return;
+  cursorTime = r.t;
+  live = false;
+  updateCursor(i);
 }
 
 function updateCursor(i) {
@@ -858,23 +860,14 @@ function scrubTo(x) {
   if (!chartPts.length) return;
   let best = chartPts[0];
   for (const p of chartPts) if (Math.abs(p.x - x) < Math.abs(best.x - x)) best = p;
-  updateCursor(best.i);
+  pickCursor(best.i);
 }
 
 /* The one way the window ever changes: store it, then load whatever files it
    now reaches over. */
 function setRange(t0, t1) {
-  const last = lastSample();
-
   viewRange = { t0, t1 };
-  selectEnd = true;
-  if (last == null) {
-    /* nothing loaded yet says nothing about the flag */
-  } else if (t1 >= last - LIVE_NEAR_MS) {
-    live = true;
-  } else if (t1 < last - LIVE_AWAY_MS) {
-    live = false;
-  }
+  cursorTime = null;
   loadWindow();
 }
 
@@ -883,8 +876,14 @@ function setRange(t0, t1) {
 function zoomToRange(t0, t1) {
   const lo = Math.min(t0, t1), hi = Math.max(t0, t1);
   const kept = windowRows().filter(r => r.t >= lo && r.t <= hi);
+  const last = lastSample();
 
   if (kept.length < 2) return;                 /* too thin to be useful */
+  if (last != null && hi >= last - LIVE_NEAR_MS) {
+    live = true;
+  } else if (last != null && hi < last - LIVE_AWAY_MS) {
+    live = false;
+  }
   setRange(lo, hi);
 }
 
@@ -893,7 +892,7 @@ function zoomOut() {
   setRange(viewRange.t0 - span / 2, viewRange.t1 + span / 2);
 }
 
-const DRAG_PX = 4;          /* shorter than this counts as a click, not a drag */
+const DRAG_PX = 12;         /* shorter than this counts as a click, not a drag */
 
 chartCanvas.addEventListener("pointerdown", e => {
   if (e.button !== 0 || !chartGeom) return;
@@ -933,6 +932,7 @@ document.getElementById("later").addEventListener("click", () =>
 function goLatest(span) {
   const end = Math.max(Date.now(), lastSample() || 0);
 
+  live = true;
   setRange(end - span, end);
 }
 
@@ -1004,8 +1004,6 @@ function tracksInWindow() {
    costs nothing the second time. */
 async function loadWindow(refetch) {
   const want = tracksInWindow();
-
-  selectEnd = true;          /* a window just loaded opens on its newest sample */
 
   for (const t of TRACKS) {
     if (!want.includes(t)) t.on = false;
@@ -1233,18 +1231,16 @@ function liveAppend(rows) {
   const fresh = rows.filter(r => !last || r.t == null || last.t == null || r.t > last.t);
   if (!fresh.length) return false;
 
-  const wasLast = chartIndex >= windowRows().length - 1;
   const newest = fresh[fresh.length - 1].t;
 
   target.rows.push(...fresh);
 
   /* Live, so the window grows at its right edge rather than leaving the new
-     samples outside it. */
+     samples outside it, and reads a file it has just grown over. */
   if (live && newest != null && newest > viewRange.t1) {
     viewRange = { t0: viewRange.t0, t1: newest };
+    if (tracksInWindow().some(t => !t.rows)) loadWindow();
   }
-
-  selectEnd = live || wasLast;   /* live keeps the cursor on the newest sample */
   return true;
 }
 
@@ -1260,7 +1256,7 @@ function liveMessage(data) {
 
   if (events.length) {
     woAdd(events, rows.length ? rows[rows.length - 1].t : Date.now());
-    updateCursor(chartIndex);
+    renderCursor();
   }
   if (liveOn && rows.length && liveAppend(rows)) redraw(false);
   liveButton();
@@ -1288,6 +1284,7 @@ function liveConnect() {
 function liveStart() {
   liveOn = true;
   live = true;
+  cursorTime = null;
   clearTimeout(liveReload);
   liveConnect();
   liveReload = setTimeout(reload, LIVE_RELOAD_MS);
@@ -1361,6 +1358,8 @@ function woButton() {
 function woSend(action, name) {
   if (!woReady()) return;
   liveSocket.send(new TextEncoder().encode(`1,${action},${name}\n`));
+  live = true;                       /* starting or stopping one is a reason to watch */
+  cursorTime = null;
   document.getElementById("woSent").textContent = action === 1 ? "Sent: run " + name : "Sent: abort";
 }
 
@@ -1411,6 +1410,10 @@ function woDraw(text) {
       for (let k = 0; k < n; k++) { pts.push(woAt(f, 3 + k * 4)); }
       L.polyline(pts, { color: "#43aa8b", weight: 2, opacity: .9 }).addTo(woLayer);
       pts.forEach((ll, k) => woMarker(ll, k + 1, k + 1 === +f[2] ? "target" : "").addTo(woLayer));
+    } else if (+f[0] === 9 && f.length >= 9) {
+      pts.push(woAt(f, 1), woAt(f, 5));
+      L.polyline(pts, { color: "#43aa8b", weight: 2, opacity: .9 }).addTo(woLayer);
+      pts.forEach((ll, k) => woMarker(ll, k + 1, "").addTo(woLayer));
     }
   });
 
@@ -1545,7 +1548,7 @@ document.addEventListener("keydown", e => {
 
   const rows = windowRows();
   if (!rows.length) return;
-  updateCursor(Math.max(0, Math.min(rows.length - 1, chartIndex + (e.key === "ArrowRight" ? 1 : -1))));
+  pickCursor(Math.max(0, Math.min(rows.length - 1, chartIndex + (e.key === "ArrowRight" ? 1 : -1))));
   e.preventDefault();
 });
 

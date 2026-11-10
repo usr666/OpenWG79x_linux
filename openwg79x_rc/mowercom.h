@@ -13,7 +13,8 @@ typedef enum {
 	MSG_REMOTE_CONTROL_TURN         = 0x02,
 	MSG_REMOTE_CONTROL_MOW          = 0x03,
 	MSG_REMOTE_CONTROL_FIND_CHARGER = 0x04,
-	MSG_REMOTE_CONTROL_POWEROFF     = 0x05
+	MSG_REMOTE_CONTROL_POWEROFF     = 0x05,
+	MSG_COMM_DEBUG                  = 0x06
 } mower_msg_id_t;
 
 /* 0x00, mower -> us */
@@ -44,6 +45,14 @@ typedef struct {
 } __attribute__((packed)) msg_remote_control_turn_t;
 
 /* 0x03 MOW, 0x04 FIND_CHARGER and 0x05 POWEROFF carry no payload */
+
+/* 0x06, mower -> us, every 10 s. Counters since power on, wrap at 255. */
+typedef struct {
+	uint8_t frames_received;	/* frames with correct crc */
+	uint8_t crc_errors;		/* frames discarded on crc mismatch */
+	uint8_t uart_overruns;		/* uart rx overruns, bytes lost */
+	uint8_t framing_errors;		/* uart framing errors, baudrate or noise */
+} __attribute__((packed)) msg_comm_debug_t;
 
 int  mowercom_open(const char *device);	/* opens uart, returns fd to poll, -1 on error */
 /* -1 uart error, 0 nothing complete yet, 1 message stored in msgid/data/len */

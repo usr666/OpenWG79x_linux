@@ -47,21 +47,36 @@ static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
 	return crc;
 }
 
+static void log_bad_frame(const char *what, const uint8_t *buf, size_t len)
+{
+	char hex[MAX_FRAME * 3 + 1] = "";
+
+	for (size_t i = 0; i < len; i++) {
+		snprintf(hex + i * 3, 4, " %02X", buf[i]);
+	}
+	logf(WARN, "mowercom %s:%s\n", what, hex);
+}
+
 static int handle_frame(const uint8_t *buf, size_t len, uint8_t *msgid, void *data, size_t size, size_t *msglen)
 {
 	uint8_t  payload = buf[1];
 	uint16_t crc_rx, crc_calc;
+	char what[80];
 
 	if (len != (size_t)payload + 4) {	/* MSG_ID + LEN + payload + CRC */
 		return 0;
 	}
 	if (payload > size) {
+		snprintf(what, sizeof(what), "too long id 0x%02X len %u size %zu", buf[0], payload, size);
+		log_bad_frame(what, buf, len);
 		return 0;
 	}
 
 	crc_rx   = (uint16_t)(buf[len - 2] << 8) | buf[len - 1];
 	crc_calc = crc16_ccitt(buf, len - 2);
 	if (crc_rx != crc_calc) {
+		snprintf(what, sizeof(what), "bad crc id 0x%02X len %u rx 0x%04X calc 0x%04X", buf[0], payload, crc_rx, crc_calc);
+		log_bad_frame(what, buf, len);
 		return 0;
 	}
 
@@ -75,6 +90,12 @@ static int parse_byte(uint8_t b, uint8_t *msgid, void *data, size_t size, size_t
 {
 	/* An unescaped START always resynchronizes. */
 	if (b == FRAME_START) {
+		if (parser.in_frame && parser.len > 0) {
+			char what[48];
+
+			snprintf(what, sizeof(what), "incomplete frame %zu bytes", parser.len);
+			log_bad_frame(what, parser.buf, parser.len);
+		}
 		parser.len = 0;
 		parser.in_frame = 1;
 		parser.escaped = 0;
